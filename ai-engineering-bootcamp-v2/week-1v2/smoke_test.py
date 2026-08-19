@@ -60,7 +60,12 @@ def main() -> int:
             print(f"FAIL: /docs returned HTTP {docs_response.status_code}")
             return 1
 
-        print(f"PASS: API health and docs are available at {base_url}")
+        ui_response = httpx.get(f"{base_url}/", timeout=2.0)
+        if ui_response.status_code != 200 or "Q&A Demo" not in ui_response.text:
+            print(f"FAIL: / returned HTTP {ui_response.status_code}")
+            return 1
+
+        print(f"PASS: API health, docs, and UI are available at {base_url}")
         return 0
     finally:
         proc.terminate()

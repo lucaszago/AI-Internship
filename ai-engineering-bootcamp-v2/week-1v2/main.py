@@ -1,15 +1,20 @@
-"""Week 1 v2 demo API: one compact `/ask` endpoint for the intro class.
+"""Week 1 v2 demo: FastAPI `/ask` plus a same-origin UI for Databricks Apps.
 
-Run:
+Run locally:
   uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+On Databricks Apps the runtime calls `python main.py`, which binds
+`0.0.0.0:$DATABRICKS_APP_PORT`.
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
 
@@ -53,17 +58,27 @@ class AttemptResult(BaseModel):
 
 
 class AskResponse(BaseModel):
-    answer: Answer
+    answer: str
     tokens_used: int
+    cost_usd: float
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    sources_needed: bool
     model: str
     latency_ms: int
-    cost_usd: float
     attempts: list[AttemptResult]
 
 
+@app.get("/", include_in_schema=False)
+def ui() -> FileResponse:
+    return FileResponse(THIS_DIR / "static" / "index.html")
+
+
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | bool]:
+    return {
+        "status": "ok",
+        "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+    }
 
 
 def get_client() -> OpenAI:
@@ -128,6 +143,12 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
 
 @app.post("/ask")
 def ask(body: AskRequest) -> AskResponse:
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY is not set. Add it as a Databricks App secret, or put it in local .env.",
+        )
+
     model = body.model or DEFAULT_MODEL
     last_error: str | None = None
     attempts: list[AttemptResult] = []
@@ -192,11 +213,13 @@ def ask(body: AskRequest) -> AskResponse:
                 model, total_prompt_tokens, total_completion_tokens
             )
             return AskResponse(
-                answer=answer,
+                answer=answer.answer,
                 tokens_used=total_tokens_used,
+                cost_usd=round(cost_usd, 6),
+                confidence_score=answer.confidence,
+                sources_needed=answer.sources_needed,
                 model=model,
                 latency_ms=latency_ms,
-                cost_usd=round(cost_usd, 6),
                 attempts=attempts,
             )
         except (ValidationError, ValueError) as exc:
@@ -215,3 +238,10 @@ def ask(body: AskRequest) -> AskResponse:
         status_code=502,
         detail=f"Model response failed schema validation after retry: {last_error}",
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("DATABRICKS_APP_PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

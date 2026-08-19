@@ -1,150 +1,319 @@
-# Week 1 v2: Minimal `/ask` Demo
+# Week 1 v2 — Structured Q&A API
 
-This folder is the simplified class version of the Week 1 AI Engineering bootcamp demo.
-Students run one final API and one small Streamlit page. The `stages/` files are optional
-teaching references that show how the endpoint grows step by step.
+A production-style LLM service built for the AI Engineering Bootcamp. The app exposes a typed
+`/ask` endpoint with structured output validation, guardrail retries, and observability
+(tokens, latency, cost). It runs locally with FastAPI and deploys as a single
+[Databricks App](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/).
 
-## What Students Will Build
+## Features
 
-A typed FastAPI endpoint that accepts a question and returns:
+- **Structured responses** — OpenAI structured output validated with Pydantic
+- **Guardrail demo** — optional `force_bad` flag triggers validation failure and retry
+- **Observability** — per-request tokens, latency, estimated cost, and attempt log
+- **Same-origin UI** — web UI and API share one process (required for Databricks Apps SSO)
+- **CI** — GitHub Actions smoke test (no OpenAI calls)
+- **Databricks deployment** — bundle + secret scope, no keys in git
 
-- `answer`: a structured answer object
-- `tokens_used`: token usage returned by the model provider
-- `model`: the model used for the request
-- `latency_ms`: how long the request took
-- `cost_usd`: an estimated request cost
-- `attempts`: validation and retry details for the guardrail demo
-
-The main idea: an LLM call becomes more useful in software when it has a predictable
-request shape, a predictable response shape, and observable runtime metadata.
-
-## Quick Start
-
-Run these commands from this `week-1v2` folder:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-test -f .env || cp .env.example .env
-```
-
-Open `.env` and add your key:
-
-```bash
-OPENAI_API_KEY=sk-...
-```
-
-## Terminal 1: Start the API
-
-```bash
-source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-Check that the API is running without spending tokens:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-You can also open the generated API docs:
+## Architecture
 
 ```text
-http://127.0.0.1:8000/docs
+Browser / curl
+     │
+     ▼
+┌─────────────────────────────────────┐
+│  FastAPI (main.py)                  │
+│  GET  /         → static/index.html │
+│  GET  /health   → status            │
+│  POST /ask      → OpenAI + validate │
+└─────────────────────────────────────┘
+     │
+     ▼
+ OpenAI API (gpt-4o-mini | gpt-4o | o3-mini)
 ```
 
-## Terminal 2: Start the Demo Page
+Locally you run uvicorn. On Databricks Apps the runtime executes `python main.py`, which
+binds to `0.0.0.0:$DATABRICKS_APP_PORT`.
+
+## API reference
+
+### `GET /health`
+
+Returns service status. Does not call OpenAI.
+
+```json
+{
+  "status": "ok",
+  "openai_key_configured": true
+}
+```
+
+### `POST /ask`
+
+**Request body**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `question` | string | yes | Non-empty question |
+| `model` | string | no | `gpt-4o-mini` (default), `gpt-4o`, or `o3-mini` |
+| `force_bad` | boolean | no | Demo flag: force malformed JSON on first attempt |
+
+**Response body (200)**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `answer` | string | Model answer text |
+| `tokens_used` | integer | Total tokens for the request |
+| `cost_usd` | float | Estimated cost (USD) |
+| `confidence_score` | float | Model confidence (0–1) |
+| `sources_needed` | boolean | Whether citations would help |
+| `model` | string | Model used |
+| `latency_ms` | integer | End-to-end latency |
+| `attempts` | array | Validation/retry log |
+
+**Example**
 
 ```bash
-source .venv/bin/activate
-streamlit run demo_page.py
+curl -s -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
+```
+
+```json
+{
+  "answer": "Retrieval-Augmented Generation combines retrieval with generation...",
+  "tokens_used": 140,
+  "cost_usd": 0.000044,
+  "confidence_score": 0.95,
+  "sources_needed": false,
+  "model": "gpt-4o-mini",
+  "latency_ms": 1200,
+  "attempts": [
+    {
+      "attempt": 1,
+      "step": "structured_output",
+      "ok": true,
+      "message": "Structured output matched the Answer schema."
+    }
+  ]
+}
+```
+
+**Error responses**
+
+| Status | When |
+| --- | --- |
+| `422` | Invalid input (empty question, unknown model) |
+| `502` | Model output failed validation after retry |
+| `503` | `OPENAI_API_KEY` not configured |
+
+Interactive docs: `http://127.0.0.1:8000/docs`
+
+## Local development
+
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/)
+
+```bash
+cd ai-engineering-bootcamp-v2/week-1v2
+uv sync
+cp .env.example .env   # add OPENAI_API_KEY
+```
+
+**Run the app**
+
+```bash
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Open:
 
-```text
-http://localhost:8501
-```
+- UI: http://127.0.0.1:8000
+- API docs: http://127.0.0.1:8000/docs
 
-Use the page to ask a question, switch models, inspect the JSON response, and copy the
-equivalent `curl` request.
-
-## Try the Guardrail Demo
-
-Turn on **Force a bad first response to demo validation + retry** in the Streamlit page.
-The API intentionally asks the model for malformed JSON on the first attempt, validates
-that response with Pydantic, records the failure, and retries with structured output.
-
-This is a small classroom-friendly example of a production habit: do not trust free-form
-LLM output at the boundary of your application.
-
-## Test With Curl
-
-Normal request:
+**Smoke test (no OpenAI calls)**
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is Retrieval-Augmented Generation in one sentence?", "model": "gpt-4o-mini"}'
+uv run python smoke_test.py
 ```
 
-Validation and retry demo:
+**Optional Streamlit client** (separate process, for classroom demos)
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is a vector database?", "model": "gpt-4o-mini", "force_bad": true}'
+uv sync --extra ui
+uv run streamlit run demo_page.py
 ```
 
-## Instructor Flow
+## Databricks Apps deployment
 
-Use `main.py` and `demo_page.py` for the live student demo. Open the stage files only when
-you want to explain how each capability was introduced:
+This project deploys as **one app** (`week1v2-ask-ui`). UI and API share the same origin so
+browser requests do not hit SSO redirects between two app URLs.
 
-| Stage | File | Teaching point |
-|-------|------|----------------|
-| 1 | `stages/stage_1_bare_ask.py` | Smallest typed `/ask`: question in, string answer out. |
-| 2 | `stages/stage_2_structured_output.py` | Add a Pydantic `Answer` schema and OpenAI structured output. |
-| 3 | `stages/stage_3_guardrails_and_observability.py` | Add validation retry, model selection, latency, and cost. |
+**Prerequisites**
 
-Run one stage at a time if you want to teach the build-up live:
+- Databricks CLI v1.0+ with an authenticated profile
+- Apps enabled in your workspace
+- A secret scope with your OpenAI key
+
+**1. Store the API key in a secret scope**
 
 ```bash
-uvicorn stages.stage_1_bare_ask:app --host 127.0.0.1 --port 8000 --reload
-uvicorn stages.stage_2_structured_output:app --host 127.0.0.1 --port 8000 --reload
-uvicorn stages.stage_3_guardrails_and_observability:app --host 127.0.0.1 --port 8000 --reload
+databricks secrets create-scope week1v2 --profile YOUR_PROFILE
+
+databricks secrets put-secret week1v2 openai_api_key \
+  --string-value "$OPENAI_API_KEY" \
+  --profile YOUR_PROFILE
 ```
 
-## Smoke Test
+**2. Configure the bundle**
 
-This starts the final API, checks `/health` and `/docs`, and does not call OpenAI:
+Edit `databricks.yml` — set your workspace host under `targets.prod.workspace.host` if
+needed. The default uses `${workspace.current_user.userName}` for the bundle path.
+
+**3. Deploy and start**
 
 ```bash
-source .venv/bin/activate
-python smoke_test.py
+databricks bundle validate --target prod --profile YOUR_PROFILE
+databricks bundle deploy --target prod --profile YOUR_PROFILE
+databricks bundle run ask_ui --target prod --profile YOUR_PROFILE
 ```
 
-## File Map
+The CLI prints the app URL when the deployment succeeds.
+
+**Secrets wiring**
+
+| File | Purpose |
+| --- | --- |
+| `databricks.yml` | Declares secret resource + env binding for bundle deploy |
+| `app.yaml` | Runtime command and env for the Databricks Apps platform |
+
+Local `.env` is **not** uploaded (see `.databricksignore`). Use the secret scope for hosted runs.
+
+## CI
+
+GitHub Actions runs on push/PR to `main`:
+
+```yaml
+uv sync --frozen
+uv run python smoke_test.py
+```
+
+Workflow: `.github/workflows/ci.yml`
+
+## CD (GitHub Actions → Databricks)
+
+Automated deploys use `.github/workflows/deploy.yml`. On push to `main` (when `week-1v2/`
+changes) or manual trigger, the workflow:
+
+1. Validates the bundle
+2. Deploys with `databricks bundle deploy`
+3. Restarts the app with `databricks bundle run ask_ui`
+4. Polls until the app is `RUNNING`
+
+### One-time setup
+
+**1. Create a service principal (if you do not have one)**
+
+In Databricks: **User management → Service principals → Add service principal**.
+
+Grant it:
+
+- **CAN MANAGE** on app `week1v2-ask-ui`
+- **CAN READ** on secret scope `week1v2` (Apps inject secrets at runtime)
+
+**2. Create a GitHub environment**
+
+Repo → **Settings → Environments → New environment** → name it `prod`.
+
+Add these **secrets** (not variables):
+
+| Secret | Value |
+| --- | --- |
+| `DATABRICKS_HOST` | `https://dbc-d3858b75-976f.cloud.databricks.com` |
+| `DATABRICKS_CLIENT_ID` | Service principal application (client) ID |
+| `DATABRICKS_CLIENT_SECRET` | Service principal OAuth secret |
+
+**3. Match bundle owner**
+
+`databricks.yml` uses `bundle_owner` (default: `lukaszago@hotmail.com`) for the workspace
+path. That must match whoever originally created the app. Override if needed:
+
+```bash
+databricks bundle deploy --target prod --var="bundle_owner=you@example.com"
+```
+
+**4. Bind existing app (only if deploy fails with 409)**
+
+Run once locally:
+
+```bash
+databricks bundle deployment bind ask_ui week1v2-ask-ui --target prod --auto-approve
+```
+
+### Run a deploy
+
+**Manual (recommended first time)**
+
+GitHub → **Actions → Deploy → Run workflow**.
+
+**Automatic**
+
+Merge to `main` with changes under `ai-engineering-bootcamp-v2/week-1v2/`.
+
+### Optional: require approval before prod
+
+In **Settings → Environments → prod → Deployment protection rules**, enable **Required
+reviewers**. Each deploy waits for approval before running.
+
+### Optional: upgrade to OIDC (no client secret)
+
+Databricks recommends [GitHub OIDC federation](https://docs.databricks.com/aws/en/dev-tools/auth/provider-github)
+instead of a long-lived secret. That swaps `oauth-m2m` for `github-oidc` and drops
+`DATABRICKS_CLIENT_SECRET`. See the [official Apps CI/CD guide](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/cicd-github-actions).
+
+## Project structure
 
 ```text
 week-1v2/
-├── README.md
-├── main.py                         # Final API used by students
-├── demo_page.py                    # Streamlit UI for the final API
-├── smoke_test.py                   # No-token API startup check
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── stages/
-    ├── stage_1_bare_ask.py
-    ├── stage_2_structured_output.py
-    └── stage_3_guardrails_and_observability.py
+├── main.py              # FastAPI app: /ask, /health, /
+├── static/index.html    # Hosted web UI
+├── demo_page.py         # Optional local Streamlit client
+├── smoke_test.py        # CI smoke test
+├── app.yaml             # Databricks Apps runtime config
+├── databricks.yml       # Bundle: app resource + secret binding
+├── pyproject.toml       # Dependencies (uv)
+├── uv.lock              # Locked deps for reproducible builds
+├── .env.example         # Local env template
+├── stages/              # Incremental teaching versions (not deployed)
+│   ├── stage_1_bare_ask.py
+│   ├── stage_2_structured_output.py
+│   └── stage_3_guardrails_and_observability.py
+└── README.md
 ```
+
+The `stages/` folder shows how the endpoint evolved step by step during the bootcamp. Only
+`main.py` is deployed.
+
+## Guardrail demo
+
+Enable **Force a bad first response** in the UI, or send `"force_bad": true` in the request
+body. The API:
+
+1. Asks the model for intentionally malformed JSON
+2. Validates with Pydantic and records the failure in `attempts`
+3. Retries with OpenAI structured output
+
+This demonstrates a production pattern: never trust raw LLM output at your API boundary.
 
 ## Troubleshooting
 
-- `Cannot reach http://127.0.0.1:8000`: start the API server in another terminal.
-- `OPENAI_API_KEY` error: make sure `.env` exists and contains a real key.
-- `Address already in use`: another server is already using port `8000`; stop it or use a different port.
-- Streamlit opens but requests fail: confirm the sidebar API base URL is `http://127.0.0.1:8000`.
+| Symptom | Fix |
+| --- | --- |
+| `OPENAI_API_KEY is not set` (hosted) | Add secret to scope `week1v2` / key `openai_api_key`, redeploy |
+| `OPENAI_API_KEY` error (local) | Create `.env` from `.env.example` |
+| 502 on Databricks | App must bind `0.0.0.0`; use `python main.py` (already in `app.yaml`) |
+| 302 between two app URLs | Use one app for UI + API (this repo's design) |
+| `409 ALREADY_EXISTS` on deploy | Keep bundle resource key `ask_ui`; do not rename without rebinding |
+| Port 8000 in use locally | Stop other servers or pick another port |
+
+## License
+
+Part of the AI Engineering Bootcamp internship repository.

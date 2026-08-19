@@ -1,11 +1,17 @@
 [project]
-name = "ai-dbx-agent"
+name = "week1v2-ask"
 version = "0.1.0"
+description = "Structured Q&A API with guardrails and Databricks Apps deployment"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]",
     "httpx",
     "openai",
     "python-dotenv",
-    "streamlit",
 ]
+
+[project.optional-dependencies]
+ui = ["streamlit"]
+
+[tool.uv]
+package = false
