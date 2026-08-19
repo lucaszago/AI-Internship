@@ -1,0 +1,11 @@
+[project]
+name = "ai-dbx-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]",
+    "httpx",
+    "openai",
+    "python-dotenv",
+    "streamlit",
+]
