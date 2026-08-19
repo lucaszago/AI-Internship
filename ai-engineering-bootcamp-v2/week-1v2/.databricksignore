@@ -1,0 +1,9 @@
+.venv
+.env
+.databricks
+__pycache__
+*.pyc
+.python-version
+.git
+.gitignore
+stages

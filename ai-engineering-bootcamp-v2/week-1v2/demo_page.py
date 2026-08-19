@@ -1,11 +1,14 @@
-"""Minimal Streamlit UI for the Week 1 v2 `/ask` demo.
+"""Optional Streamlit client for local development.
 
-Run:
-  streamlit run demo_page.py
+The hosted Databricks App serves static/index.html from FastAPI instead.
+Run the API first, then:
+
+  uv sync --extra ui
+  uv run streamlit run demo_page.py
 """
 
 import json
-
+import os
 import httpx
 import streamlit as st
 
@@ -74,11 +77,18 @@ def render_response_summary(data: dict | str) -> None:
         return
 
     answer = data.get("answer")
-    if isinstance(answer, dict):
+    if isinstance(answer, str) and answer:
+        st.markdown("### Answer")
+        st.write(answer)
+        st.caption(
+            f"confidence_score: {data.get('confidence_score')} | "
+            f"sources_needed: {data.get('sources_needed')}"
+        )
+    elif isinstance(answer, dict):
         st.markdown("### Answer")
         st.write(answer.get("answer", ""))
         st.caption(
-            f"confidence: {answer.get('confidence')} | "
+            f"confidence_score: {answer.get('confidence_score', answer.get('confidence'))} | "
             f"sources_needed: {answer.get('sources_needed')}"
         )
 
@@ -89,13 +99,14 @@ def render_response_summary(data: dict | str) -> None:
     metric_cols[3].metric("Cost", f"${data.get('cost_usd', '-')}")
 
 
-st.set_page_config(page_title="Week 1 v2 /ask Demo", layout="centered")
-st.title("Week 1 v2: Minimal `/ask` Demo")
+st.set_page_config(page_title="Q&A Demo", layout="centered")
+st.title("Q&A Demo")
 st.caption(
-    "One final demo endpoint. The separate `stages/` files show how this grows step by step."
+    "Optional local client. The deployed app uses the built-in UI at /."
 )
 
-base_url = st.sidebar.text_input("API base URL", "http://127.0.0.1:8000")
+default_base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+base_url = st.sidebar.text_input("API base URL", default_base_url)
 st.sidebar.markdown("### Start the API")
 st.sidebar.code(
     f"cd {WORKDIR_CMD}\n"

@@ -1,0 +1,34 @@
+bundle:
+  name: question-answer-demo-app
+
+variables:
+  bundle_owner:
+    description: Workspace user that owns bundle artifacts (must match app owner)
+    default: lukaszago@hotmail.com
+
+resources:
+  apps:
+    ask_ui:
+      name: week1v2-ask-ui
+      source_code_path: .
+      description: Structured Q&A API with same-origin web UI
+      resources:
+        - name: openai_api_key
+          secret:
+            scope: week1v2
+            key: openai_api_key
+            permission: READ
+      config:
+        command:
+          - python
+          - main.py
+        env:
+          - name: OPENAI_API_KEY
+            value_from: openai_api_key
+
+targets:
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-d3858b75-976f.cloud.databricks.com
+      root_path: /Workspace/Users/${var.bundle_owner}/.bundle/${bundle.name}/${bundle.target}

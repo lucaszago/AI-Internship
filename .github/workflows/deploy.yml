@@ -1,0 +1,59 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ai-engineering-bootcamp-v2/week-1v2/**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-week1v2-prod
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Databricks Apps
+    runs-on: ubuntu-latest
+    environment: prod
+    defaults:
+      run:
+        working-directory: ai-engineering-bootcamp-v2/week-1v2
+    env:
+      DATABRICKS_AUTH_TYPE: oauth-m2m
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@v1
+
+      - name: Validate bundle
+        run: databricks bundle validate --target prod
+
+      - name: Deploy bundle
+        run: databricks bundle deploy --target prod --auto-approve
+
+      - name: Start app
+        run: databricks bundle run ask_ui --target prod
+
+      - name: Wait for app to be running
+        env:
+          APP_NAME: week1v2-ask-ui
+        run: |
+          for i in $(seq 1 20); do
+            STATE=$(databricks apps get "$APP_NAME" --output json | jq -r '.app_status.state')
+            echo "Attempt $i/20: state=$STATE"
+            if [ "$STATE" = "RUNNING" ]; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "App did not reach RUNNING within 5 minutes" >&2
+          exit 1

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Q&A Demo</title>
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --panel: #14181d;
+        --panel-2: #1c2128;
+        --line: #2a313a;
+        --text: #f4f6f8;
+        --muted: #9aa4b2;
+        --coral: #ff3621;
+        --green: #3dd68c;
+        --amber: #f5c14a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background:
+          radial-gradient(1200px 500px at 10% -10%, #3a120c 0%, transparent 50%),
+          var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 40px 20px 64px;
+      }
+      .eyebrow {
+        color: var(--coral);
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      h1 {
+        margin: 8px 0 8px;
+        font-size: 36px;
+        letter-spacing: -0.03em;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 28px;
+        max-width: 62ch;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      textarea,
+      select {
+        width: 100%;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 14px;
+        font: inherit;
+      }
+      textarea {
+        min-height: 110px;
+        resize: vertical;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: end;
+        margin-top: 14px;
+      }
+      .check {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 14px;
+        margin-top: 14px;
+      }
+      button {
+        background: var(--coral);
+        color: white;
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--line);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .metric {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+      }
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .metric strong {
+        font-size: 20px;
+      }
+      .answer {
+        font-size: 18px;
+        line-height: 1.5;
+        margin: 0 0 8px;
+      }
+      .ok {
+        color: var(--green);
+      }
+      .bad {
+        color: var(--coral);
+      }
+      .warn {
+        color: var(--amber);
+      }
+      pre {
+        overflow: auto;
+        background: #0a0c0f;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 12px;
+      }
+      .attempt {
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+        margin-top: 12px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      @media (max-width: 720px) {
+        .row,
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">Databricks App</div>
+      <h1>Q&A Demo</h1>
+      <p class="lede">
+        Ask a question. This app calls <code>/ask</code> on the same origin and
+        returns a structured answer plus tokens, latency, and cost.
+      </p>
+
+      <form class="card" id="ask-form">
+        <label for="question">Question</label>
+        <textarea id="question">What is Retrieval-Augmented Generation in one sentence?</textarea>
+        <div class="row">
+          <div>
+            <label for="model">Model</label>
+            <select id="model">
+              <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
+              <option value="gpt-4o">gpt-4o</option>
+              <option value="o3-mini">o3-mini</option>
+            </select>
+          </div>
+          <div class="actions">
+            <button class="secondary" type="button" id="health-btn">Health</button>
+            <button type="submit" id="ask-btn">Ask</button>
+          </div>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="force-bad" />
+          Force a bad first response to demo validation + retry
+        </label>
+      </form>
+
+      <section class="card" id="result" hidden></section>
+    </main>
+    <script>
+      const result = document.getElementById("result");
+      const askBtn = document.getElementById("ask-btn");
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      function renderAttempts(attempts) {
+        if (!attempts || !attempts.length) return "";
+        return attempts
+          .map((item) => {
+            const status = item.ok ? "ok" : "bad";
+            const raw = item.raw_output
+              ? `<pre>${escapeHtml(item.raw_output)}</pre>`
+              : "";
+            const err = item.validation_error
+              ? `<pre>${escapeHtml(item.validation_error)}</pre>`
+              : "";
+            return `<div class="attempt">
+              <strong class="${status}">Attempt ${item.attempt}: ${escapeHtml(
+                item.step
+              )}</strong>
+              <p>${escapeHtml(item.message || "")}</p>
+              ${raw}${err}
+            </div>`;
+          })
+          .join("");
+      }
+
+      function renderPayload(status, data) {
+        const answerText =
+          data && typeof data.answer === "string"
+            ? data.answer
+            : data && data.answer && data.answer.answer;
+        const answerHtml = answerText
+          ? `<p class="answer">${escapeHtml(answerText)}</p>
+             <p class="lede">confidence_score: ${escapeHtml(
+               data.confidence_score
+             )} | sources_needed: ${escapeHtml(data.sources_needed)}</p>`
+          : "";
+        const metrics =
+          data && data.model
+            ? `<div class="metrics">
+                <div class="metric"><span>Model</span><strong>${escapeHtml(
+                  data.model
+                )}</strong></div>
+                <div class="metric"><span>Tokens</span><strong>${escapeHtml(
+                  data.tokens_used
+                )}</strong></div>
+                <div class="metric"><span>Latency</span><strong>${escapeHtml(
+                  data.latency_ms
+                )} ms</strong></div>
+                <div class="metric"><span>Cost</span><strong>$${escapeHtml(
+                  data.cost_usd
+                )}</strong></div>
+              </div>`
+            : "";
+        const error = data && data.detail ? `<p class="bad">${escapeHtml(data.detail)}</p>` : "";
+        result.hidden = false;
+        result.innerHTML = `
+          <p class="${status >= 200 && status < 300 ? "ok" : "bad"}">HTTP ${status}</p>
+          ${error}
+          ${answerHtml}
+          ${metrics}
+          ${renderAttempts(data && data.attempts)}
+          <h3>Raw JSON</h3>
+          <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+        `;
+      }
+
+      document.getElementById("health-btn").addEventListener("click", async () => {
+        const response = await fetch("/health");
+        const data = await response.json();
+        result.hidden = false;
+        result.innerHTML = `<p class="ok">HTTP ${response.status}</p><pre>${escapeHtml(
+          JSON.stringify(data, null, 2)
+        )}</pre>`;
+      });
+
+      document.getElementById("ask-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        askBtn.disabled = true;
+        result.hidden = false;
+        result.innerHTML = `<p class="warn">Calling /ask…</p>`;
+        try {
+          const payload = {
+            question: document.getElementById("question").value,
+            model: document.getElementById("model").value,
+            force_bad: document.getElementById("force-bad").checked,
+          };
+          const response = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          renderPayload(response.status, data);
+        } catch (error) {
+          renderPayload(0, { detail: String(error) });
+        } finally {
+          askBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
