@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - "ai-engineering-bootcamp-v2/week-1v2/**"
-      - ".github/workflows/deploy.yml"
 
 permissions:
   contents: read
@@ -20,9 +17,6 @@ jobs:
     name: Deploy to Databricks Apps
     runs-on: ubuntu-latest
     environment: prod
-    defaults:
-      run:
-        working-directory: ai-engineering-bootcamp-v2/week-1v2
     env:
       DATABRICKS_AUTH_TYPE: oauth-m2m
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

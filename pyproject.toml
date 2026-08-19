@@ -10,8 +10,5 @@ dependencies = [
     "python-dotenv",
 ]
 
-[project.optional-dependencies]
-ui = ["streamlit"]
-
 [tool.uv]
 package = false

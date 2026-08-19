@@ -1,6 +1,0 @@
-RENDER START COMMAND (Copy this exactly):
-
-python -m uvicorn main:app --host 0.0.0.0 --port $PORT
-
-Note: Use "python -m uvicorn" not just "uvicorn" to ensure it's found in the Python environment.
-
