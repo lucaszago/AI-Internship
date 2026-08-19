@@ -9,8 +9,44 @@ two separate apps cannot call each other in the browser without an SSO redirect 
 
 **Live app:** [week1v2-ask-ui](https://week1v2-ask-ui-299177927171866.aws.databricksapps.com)
 
+## Quick start
+
+**1. Setup** (from the repository root)
+
+```bash
+uv sync
+cp .env.example .env   # then add OPENAI_API_KEY locally — never commit .env
+```
+
+**2. Run locally**
+
+```bash
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open http://127.0.0.1:8000 for the UI, or http://127.0.0.1:8000/docs for Swagger.
+
+**3. Test with curl**
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
+```
+
+**4. Deploy to Databricks** (after one-time secret setup; see [Databricks Apps](#databricks-apps))
+
+```bash
+databricks bundle validate --target prod --profile YOUR_PROFILE
+databricks bundle deploy --target prod --profile YOUR_PROFILE
+databricks bundle run ask_ui --target prod --profile YOUR_PROFILE
+```
+
+Or merge to `main` and let GitHub Actions deploy automatically.
+
 ## Contents
 
+- [Quick start](#quick-start)
 - [What this project is](#what-this-project-is)
 - [Architecture](#architecture)
 - [API reference](#api-reference)
@@ -163,6 +199,16 @@ curl -s -X POST http://127.0.0.1:8000/ask \
 
 Attempt 1 records a validation failure. Attempt 2 uses structured output and should succeed.
 
+**Hosted example** (requires Databricks SSO in the browser; use curl from a logged-in session or test via the live UI)
+
+```bash
+curl -s -X POST https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
+```
+
+Do not post this URL publicly — anyone with access can spend your OpenAI credits.
+
 **Errors**
 
 | Status | When | Body |
@@ -279,8 +325,6 @@ from a **secret resource** declared in `databricks.yml` and referenced in `app.y
 ### Deploy from your laptop
 
 ```bash
-cd ai-engineering-bootcamp-v2/week-1v2
-
 databricks bundle validate --target prod --profile YOUR_PROFILE
 databricks bundle deploy --target prod --profile YOUR_PROFILE
 databricks bundle run ask_ui --target prod --profile YOUR_PROFILE
@@ -423,8 +467,7 @@ any Databricks command runs.
 | Local 503 | Missing `.env` | `cp .env.example .env` and set the key |
 | Local 422 | Empty question or bad model name | Use `gpt-4o-mini`, `gpt-4o`, or `o3-mini` |
 | `409 ALREADY_EXISTS` | Bundle tried to create an app that already exists | Bind `ask_ui` to `week1v2-ask-ui`; do not rename the resource key |
-| GitHub Deploy fails in **Set up job** on `@v1` | Invalid action tag | Use `databricks/setup-cli@main` (already in `deploy.yml` on `feature/lzago`) |
-| GitHub Deploy still uses `@v1` | Fix not merged to `main` | Merge the pin PR, then re-run Deploy on `main` |
+| GitHub Deploy fails in **Set up job** on `@v1` | Invalid action tag | Use `databricks/setup-cli@main` with `version: 1.12.1` (see `deploy.yml`) |
 | Deploy job 403 | SP cannot manage the app | Grant the GitHub SP **CAN MANAGE** on `week1v2-ask-ui` |
 | App deploys but still serves old UI | Skipped `bundle run` | Restart with `databricks bundle run ask_ui --target prod` |
 | Port 8000 in use locally | Another process | Stop it or pass `--port 8001` |
