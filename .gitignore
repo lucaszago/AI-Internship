@@ -1,9 +1,7 @@
-# Secrets — never commit API keys or local credentials
+# Secrets — never commit API keys
 .env
 .env.local
 *.pem
-secrets.toml
-.streamlit/secrets.toml
 
 # Python
 __pycache__/
@@ -12,22 +10,17 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-dist/
-build/
 
 # Virtual environments
-.venv/
 venv/
+.venv/
 env/
 
-# Jupyter
-.ipynb_checkpoints/
+# Databricks local state
+.databricks/
 
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
 .cursor/
-
-# Local scratch (not part of the course repo)
-ai-eng-demo-1/
