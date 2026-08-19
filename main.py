@@ -1,10 +1,18 @@
-"""Week 1 v2 demo: FastAPI `/ask` plus a same-origin UI for Databricks Apps.
+"""Structured Q&A API with a same-origin web UI.
 
-Run locally:
-  uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+This module exposes a FastAPI app that accepts a question, calls OpenAI with
+structured output, validates the response against the ``Answer`` schema, and
+returns flattened metadata (tokens, cost, latency, retry log).
 
-On Databricks Apps the runtime calls `python main.py`, which binds
-`0.0.0.0:$DATABRICKS_APP_PORT`.
+The UI is served from ``static/index.html`` on the same origin so Databricks
+Apps SSO does not block browser calls to ``/ask``.
+
+Run locally::
+
+    uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+On Databricks Apps the runtime calls ``python main.py``, which binds
+``0.0.0.0:$DATABRICKS_APP_PORT``.
 """
 
 import os
@@ -35,7 +43,7 @@ MODEL_PRICES_PER_1K: dict[str, tuple[float, float]] = {
 
 
 class Answer(BaseModel):
-    """The model output shape we want every caller to receive."""
+    """Structured output schema enforced by OpenAI on each attempt."""
 
     answer: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -43,12 +51,16 @@ class Answer(BaseModel):
 
 
 class AskRequest(BaseModel):
+    """Incoming ``POST /ask`` payload."""
+
     question: str = Field(min_length=1)
     model: ModelName | None = None
     force_bad: bool = False
 
 
 class AttemptResult(BaseModel):
+    """One validation attempt recorded in the ``/ask`` retry log."""
+
     attempt: int
     step: str
     ok: bool
@@ -58,6 +70,12 @@ class AttemptResult(BaseModel):
 
 
 class AskResponse(BaseModel):
+    """Public HTTP response for ``POST /ask``.
+
+    Flattens the nested ``Answer`` fields (``confidence`` → ``confidence_score``)
+    and adds usage metadata required by the bootcamp assignment contract.
+    """
+
     answer: str
     tokens_used: int
     cost_usd: float
@@ -70,11 +88,13 @@ class AskResponse(BaseModel):
 
 @app.get("/", include_in_schema=False)
 def ui() -> FileResponse:
+    """Serve the hosted chat UI from the same origin as ``/ask``."""
     return FileResponse(THIS_DIR / "static" / "index.html")
 
 
 @app.get("/health")
 def health() -> dict[str, str | bool]:
+    """Liveness probe that does not call OpenAI."""
     return {
         "status": "ok",
         "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
@@ -82,6 +102,7 @@ def health() -> dict[str, str | bool]:
 
 
 def get_client() -> OpenAI:
+    """Return a lazily initialized OpenAI client."""
     global _client
     if _client is None:
         _client = OpenAI()
@@ -89,6 +110,7 @@ def get_client() -> OpenAI:
 
 
 def compute_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Estimate USD cost from hardcoded per-1K token prices in ``MODEL_PRICES_PER_1K``."""
     input_per_1k, output_per_1k = MODEL_PRICES_PER_1K.get(
         model, MODEL_PRICES_PER_1K[DEFAULT_MODEL]
     )
@@ -98,6 +120,7 @@ def compute_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> 
 
 
 def usage_counts(completion) -> tuple[int, int, int]:
+    """Return ``(total_tokens, prompt_tokens, completion_tokens)`` from a completion."""
     usage = completion.usage
     if usage is None:
         return 0, 0, 0
@@ -105,6 +128,7 @@ def usage_counts(completion) -> tuple[int, int, int]:
 
 
 def call_structured_model(question: str, model: ModelName) -> tuple[Answer, int, int, int]:
+    """Call OpenAI with ``response_format=Answer`` and return parsed output plus token counts."""
     completion = get_client().chat.completions.parse(
         model=model,
         messages=[{"role": "user", "content": question}],
@@ -120,7 +144,7 @@ def call_structured_model(question: str, model: ModelName) -> tuple[Answer, int,
 
 
 def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int, int, int]:
-    """Demo-only path: force one malformed response so students can see retry."""
+    """Return intentionally invalid JSON for the guardrail demo when ``force_bad`` is set."""
 
     completion = get_client().chat.completions.create(
         model=model,
@@ -143,6 +167,12 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
 
 @app.post("/ask")
 def ask(body: AskRequest) -> AskResponse:
+    """Answer a question with up to two attempts and a structured retry log.
+
+    When ``force_bad`` is true, attempt 1 uses plain JSON that should fail
+    validation; attempt 2 falls back to structured output. Returns 503 if the
+    API key is missing and 502 if both attempts fail validation.
+    """
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
             status_code=503,
