@@ -1,476 +1,465 @@
-# Week 1 v2 — Structured Q&A API
+# Week 2 — RAG Q&A API (Databricks AI Search)
 
-A typed LLM service for the AI Engineering Bootcamp. Callers send a question; the service
-returns a validated answer plus tokens, latency, estimated cost, and a retry log.
+Session 2 RAG assignment for the [AI Engineering Bootcamp](https://tailabs.ai/ai-eng-syllabus/week-2/week-2-rag-assignment-guide). Extends Session 1 `POST /ask` with document ingest, retrieval debug, citations, and refusal.
 
-The same FastAPI process serves both the API and a small web UI. That design is required
-for [Databricks Apps](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/):
-two separate apps cannot call each other in the browser without an SSO redirect (HTTP 302).
+**Vector store:** Databricks AI Search (Delta Sync) + Unity Catalog — not Pinecone.
 
 **Live app:** [week1v2-ask-ui](https://week1v2-ask-ui-299177927171866.aws.databricksapps.com)
 
-## Quick start
+Do **not** post the live URL publicly (LinkedIn, etc.). Use it only for Maven submission.
 
-**1. Setup** (from the repository root)
-
-```bash
-uv sync
-cp .env.example .env   # then add OPENAI_API_KEY locally — never commit .env
-```
-
-**2. Run locally**
-
-```bash
-uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-Open http://127.0.0.1:8000 for the UI, or http://127.0.0.1:8000/docs for Swagger.
-
-**3. Test with curl**
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
-```
-
-**4. Deploy to Databricks** (after one-time secret setup; see [Databricks Apps](#databricks-apps))
-
-```bash
-databricks bundle validate --target prod --profile YOUR_PROFILE
-databricks bundle deploy --target prod --profile YOUR_PROFILE
-databricks bundle run ask_ui --target prod --profile YOUR_PROFILE
-```
-
-Or merge to `main` and let GitHub Actions deploy automatically.
+---
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [What this project is](#what-this-project-is)
-- [Architecture](#architecture)
-- [API reference](#api-reference)
-- [How `/ask` works](#how-ask-works)
-- [Local development](#local-development)
-- [Databricks Apps](#databricks-apps)
-- [Secrets](#secrets)
-- [CI and CD](#ci-and-cd)
-- [Project structure](#project-structure)
-- [Troubleshooting](#troubleshooting)
+1. [Folder layout](#folder-layout)
+2. [Quick start (local)](#quick-start-local)
+3. [One-time Databricks setup](#one-time-databricks-setup)
+4. [API reference](#api-reference)
+5. [Streamlit UI](#streamlit-ui)
+6. [Deploy to Databricks](#deploy-to-databricks)
+7. [Assignment proof (Maven)](#assignment-proof-maven)
+8. [Environment variables](#environment-variables)
+9. [Troubleshooting](#troubleshooting)
 
-## What this project is
+---
 
-| Layer | Choice |
+## Folder layout
+
+```text
+AI-Internship/
+├── main.py                      # FastAPI app (/, /health, /ingest, /debug/retrieve, /ask)
+├── rag/                         # RAG library
+│   ├── config.py                # Env vars → table/index names
+│   ├── chunking.py              # Text splitter
+│   ├── embeddings.py            # OpenAI embeddings
+│   ├── store.py                 # Write chunks to Delta
+│   ├── search.py                # sync_index + query_index
+│   ├── prompts.py               # Grounding prompt + refusal
+│   ├── ingest.py                # End-to-end ingest
+│   └── routes.py                # Request/response models + handlers
+├── ui/
+│   └── streamlit_app.py         # Demo UI (calls the API only)
+├── scripts/
+│   ├── setup_delta_table.py     # Create Unity Catalog Delta table
+│   └── batch_ingest.py          # Ingest a folder of .txt/.md files
+├── notebooks/
+│   └── setup_ai_search.ipynb    # Create endpoint + index; verify sync/query
+├── sample_docs/
+│   └── handbook.txt             # Small test document
+├── static/
+│   └── index.html               # Same-origin browser UI on Databricks Apps
+├── smoke_test.py                # CI health check (no OpenAI/Databricks)
+├── app.yaml                     # Databricks Apps runtime env
+├── databricks.yml               # Bundle: app + resources + secrets
+├── .env.example                 # Copy to .env locally
+└── README.md
+```
+
+| Path | Purpose |
 | --- | --- |
-| Language | Python 3.12+ |
-| Package manager | [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`) |
-| API | FastAPI in `main.py` |
-| UI | Same-origin HTML at `static/index.html` |
-| Model provider | OpenAI (`gpt-4o-mini`, `gpt-4o`, `o3-mini`) |
-| Host | One Databricks App named `week1v2-ask-ui` |
-| Deploy | Databricks Asset Bundle + GitHub Actions |
+| `main.py` | HTTP routes — keep thin |
+| `rag/` | All RAG logic |
+| `ui/` | Streamlit demo (local / screenshot) |
+| `scripts/` | One-off setup + batch tools |
+| `notebooks/` | Databricks AI Search setup |
+| `sample_docs/` | Test corpus |
 
-The HTTP contract matches the bootcamp assignment: top-level `answer`, `tokens_used`,
-`cost_usd`, `confidence_score`, `sources_needed`, `model`, `latency_ms`, and `attempts`.
-Internally the model still emits a nested Pydantic `Answer` (`answer`, `confidence`,
-`sources_needed`). That internal schema is flattened before the HTTP response.
+---
 
-## Architecture
+## Quick start (local)
 
-```text
-                    ┌──────────────────────────────────────┐
-  Browser / curl ─► │ FastAPI  (one process, one origin)   │
-                    │                                      │
-                    │  GET  /         static/index.html    │
-                    │  GET  /health   liveness + key flag  │
-                    │  GET  /docs     OpenAPI UI           │
-                    │  POST /ask      validate → OpenAI    │
-                    └───────────────────┬──────────────────┘
-                                        │
-                                        ▼
-                                 OpenAI Chat Completions
-                                 (structured output + retry)
-```
-
-**Local:** `uvicorn main:app --host 127.0.0.1 --port 8000`
-
-**Databricks Apps:** `python main.py` binds `0.0.0.0:$DATABRICKS_APP_PORT`. The platform
-injects that port. Binding `127.0.0.1` or a hardcoded port causes a 502.
-
-**Why one app, not Streamlit + FastAPI as two apps**
-
-Databricks Apps sit behind SSO. A UI on `week1v2-ask-ui-….databricksapps.com` that
-`fetch`es `week1v2-ask-api-….databricksapps.com` does not send the session cookie.
-The API returns **302 to login**, not JSON. Serving UI and `/ask` from one origin
-avoids that.
-
-## API reference
-
-Base URL locally: `http://127.0.0.1:8000`  
-Base URL hosted: `https://week1v2-ask-ui-299177927171866.aws.databricksapps.com`
-
-OpenAPI: `{base}/docs`
-
-### `GET /health`
-
-Does not call OpenAI. Use this to confirm the process is up and whether the key is present.
-
-```json
-{
-  "status": "ok",
-  "openai_key_configured": true
-}
-```
-
-`openai_key_configured` is `true` when `OPENAI_API_KEY` is set (from `.env` locally, or
-from the Databricks secret at runtime). It does not prove the key is valid.
-
-### `POST /ask`
-
-**Request**
-
-| Field | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `question` | string (min length 1) | yes | — | User question |
-| `model` | `"gpt-4o-mini"` \| `"gpt-4o"` \| `"o3-mini"` | no | `gpt-4o-mini` | Chat model |
-| `force_bad` | boolean | no | `false` | Force malformed JSON on attempt 1 |
-
-**Response (200)**
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `answer` | string | Final answer text |
-| `tokens_used` | integer | Prompt + completion tokens across attempts |
-| `cost_usd` | float | Estimate from hardcoded per-1K prices |
-| `confidence_score` | float 0–1 | Model-reported confidence |
-| `sources_needed` | boolean | Whether citations would help |
-| `model` | string | Model actually used |
-| `latency_ms` | integer | Wall time for the whole `/ask` call |
-| `attempts` | array | Per-attempt validation log |
-
-Each `attempts[]` item:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `attempt` | integer | 1-based |
-| `step` | string | `forced_bad_json` or `structured_output` |
-| `ok` | boolean | Whether that attempt passed validation |
-| `message` | string | Human-readable outcome |
-| `raw_output` | string \| null | Model text (forced-bad path) |
-| `validation_error` | string \| null | Pydantic error if validation failed |
-
-**Happy-path example**
+Always run commands from the **repo root** (the folder that contains `main.py`).
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
+cd /Users/lucaszago/Downloads/ai_learning/AI-Internship
 ```
 
-```json
-{
-  "answer": "Retrieval-Augmented Generation combines retrieval with generation...",
-  "tokens_used": 140,
-  "cost_usd": 0.000044,
-  "confidence_score": 0.95,
-  "sources_needed": false,
-  "model": "gpt-4o-mini",
-  "latency_ms": 1200,
-  "attempts": [
-    {
-      "attempt": 1,
-      "step": "structured_output",
-      "ok": true,
-      "message": "Structured output matched the Answer schema.",
-      "raw_output": null,
-      "validation_error": null
-    }
-  ]
-}
-```
-
-**Guardrail example**
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is a vector database?", "force_bad": true}'
-```
-
-Attempt 1 records a validation failure. Attempt 2 uses structured output and should succeed.
-
-**Hosted example** (requires Databricks SSO in the browser; use curl from a logged-in session or test via the live UI)
-
-```bash
-curl -s -X POST https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
-```
-
-Do not post this URL publicly — anyone with access can spend your OpenAI credits.
-
-**Errors**
-
-| Status | When | Body |
-| --- | --- | --- |
-| `422` | Empty `question`, unknown `model`, or other Pydantic request errors | FastAPI `detail` list |
-| `502` | Both attempts failed schema validation | `{ "detail": "Model response failed..." }` |
-| `503` | `OPENAI_API_KEY` missing | `{ "detail": "OPENAI_API_KEY is not set..." }` |
-
-## How `/ask` works
-
-```text
-POST /ask
-   │
-   ├─ no OPENAI_API_KEY  → 503
-   ├─ invalid body       → 422
-   │
-   └─ loop up to 2 attempts
-         │
-         ├─ force_bad and attempt 1
-         │     call chat.completions.create (plain JSON, bad confidence type)
-         │     validate with Answer.model_validate_json
-         │     fail → record attempt, continue
-         │
-         └─ otherwise
-               call chat.completions.parse (response_format=Answer)
-               flatten to AskResponse
-               return 200
-```
-
-**Cost estimate** (USD per 1K tokens, hardcoded in `main.py`):
-
-| Model | Input | Output |
-| --- | --- | --- |
-| `gpt-4o-mini` | 0.00015 | 0.0006 |
-| `gpt-4o` | 0.0025 | 0.01 |
-| `o3-mini` | 0.0011 | 0.0044 |
-
-These are classroom approximations, not live billing.
-
-## Local development
-
-**Prerequisites**
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- An OpenAI API key
-
-**Install and configure**
+### 1. Install
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-Put the key in `.env`:
+Edit `.env`:
 
 ```bash
 OPENAI_API_KEY=sk-...
+DATABRICKS_CONFIG_PROFILE=dbx-lzago-ai
 ```
 
-Never commit `.env`. Git and Databricks both ignore it.
+```bash
+databricks auth login --profile dbx-lzago-ai
+```
 
-**Run**
+### 2. Infra (skip if already done)
+
+```bash
+uv run python scripts/setup_delta_table.py
+# Then create endpoint + index via notebooks/setup_ai_search.ipynb
+```
+
+### 3. Start API
 
 ```bash
 uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-| URL | What |
+- Swagger: http://127.0.0.1:8000/docs  
+- Health: http://127.0.0.1:8000/health  
+
+### 4. Smoke the RAG loop
+
+```bash
+# Ingest
+curl -s -X POST http://127.0.0.1:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Remote work: up to 3 days per week with manager approval.", "document_id": "handbook"}'
+
+# Wait 1–2 minutes for index sync, then retrieve (no LLM)
+curl -s "http://127.0.0.1:8000/debug/retrieve?q=remote+work+policy" | python3 -m json.tool
+
+# Cited answer
+curl -s -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the remote work policy?"}' | python3 -m json.tool
+
+# Refusal
+curl -s -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the CEO salary?"}' | python3 -m json.tool
+```
+
+### 5. Streamlit
+
+Keep the API running, then in a **second terminal**:
+
+```bash
+cd /Users/lucaszago/Downloads/ai_learning/AI-Internship
+uv run streamlit run ui/streamlit_app.py
+```
+
+Open http://localhost:8501 — sidebar API URL = `http://127.0.0.1:8000`.
+
+---
+
+## One-time Databricks setup
+
+| Object | Name |
 | --- | --- |
-| http://127.0.0.1:8000 | Web UI |
-| http://127.0.0.1:8000/docs | Swagger |
-| http://127.0.0.1:8000/health | Liveness |
+| Catalog | `workspace` |
+| Schema | `document_retrieval` |
+| Delta table | `workspace.document_retrieval.document_chunks` |
+| AI Search endpoint | `document-chunks-search-endpoint` |
+| AI Search index | `workspace.document_retrieval.document_chunks_index` |
+| Embeddings | `text-embedding-3-small` (1536 dims) |
 
-Production-style start (same as Databricks):
+**Free Edition:** use **Delta Sync** (TRIGGERED). Direct Access / `upsert` is not available.
 
-```bash
-DATABRICKS_APP_PORT=8000 uv run python main.py
+1. `uv run python scripts/setup_delta_table.py`
+2. Run `notebooks/setup_ai_search.ipynb` (endpoint → index → sync → query)
+
+---
+
+## Architecture
+
+```text
+POST /ingest
+  → chunk → embed → append Delta → sync_index()
+
+GET /debug/retrieve?q=...
+  → embed question → query_index → return chunks (no LLM)
+
+POST /ask
+  → retrieve → grounding prompt → structured LLM
+  → answer + citations + retrieved_chunk_ids + refused
 ```
 
-**Smoke test** (no OpenAI call; checks `/`, `/health`, `/docs`)
+---
 
-```bash
-uv run python smoke_test.py
+## API reference
+
+Local base: `http://127.0.0.1:8000` · OpenAPI: `/docs`
+
+### `GET /health`
+
+Returns `openai_key_configured`, `rag_configured`, and resolved RAG names. No external calls.
+
+### `POST /ingest`
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `text` | yes | Document body |
+| `document_id` | yes | Stable ID (re-ingest replaces old chunks) |
+| `source` | no | Optional label / filename |
+
+```json
+{"document_id": "handbook", "chunks_indexed": 1, "status": "indexed"}
 ```
 
-## Databricks Apps
+### `GET /debug/retrieve?q=...`
 
-App name: `week1v2-ask-ui`  
-Bundle name: `question-answer-demo-app`  
-Bundle resource key: `ask_ui`  
-Target: `prod`
+Top-k chunks + scores. Use this **before** debugging `/ask`.
+
+### `POST /ask`
+
+RAG by default. Response includes Session 1 fields plus:
+
+| Field | Description |
+| --- | --- |
+| `citations` | `document_id` values the model cited |
+| `retrieved_chunk_ids` | Chunk IDs from search |
+| `refused` | `true` when answer is the refusal phrase |
+
+Refusal phrase: `I don't have enough information to answer that.`
+
+`force_bad: true` still runs the Session 1 guardrail demo (skips RAG).
+
+---
+
+## Streamlit UI
+
+```bash
+uv run streamlit run ui/streamlit_app.py
+```
+
+| Tab | What it does |
+| --- | --- |
+| Ingest | Calls `POST /ingest` |
+| Ask | Calls `POST /ask` — shows citations / refusal |
+| Debug retrieve | Calls `GET /debug/retrieve` |
+
+Optional `.env`:
+
+```bash
+API_URL=http://127.0.0.1:8000
+# After deploy, you can set the Databricks App URL (SSO may apply)
+```
+
+Streamlit is a **thin client**. All RAG logic stays in FastAPI.
+
+---
+
+## Deploy to Databricks
+
+Deploys **FastAPI only** (`main.py` + `rag/` + `static/`). Streamlit stays on your laptop for demos/screenshots.
 
 ### Prerequisites
 
-- Databricks CLI 1.12+ (`databricks -v`)
-- A CLI profile (`databricks auth login --profile YOUR_PROFILE`)
-- Apps enabled on the workspace
-- Permission to create/manage apps
+- [ ] CLI: `databricks -v` (1.12+)
+- [ ] Auth: `databricks auth login --profile dbx-lzago-ai`
+- [ ] Secret scope `week1v2` / key `openai_api_key`
+- [ ] Phase 0 table + AI Search index exist
 
-### Secret (one-time)
+### One-time secret
 
 ```bash
-databricks secrets create-scope week1v2 --profile YOUR_PROFILE
+databricks secrets create-scope week1v2 --profile dbx-lzago-ai
 
 databricks secrets put-secret week1v2 openai_api_key \
   --string-value "$OPENAI_API_KEY" \
-  --profile YOUR_PROFILE
+  --profile dbx-lzago-ai
 ```
 
-The Environment tab in the Apps UI does **not** have an Add button. Keys are injected
-from a **secret resource** declared in `databricks.yml` and referenced in `app.yaml`.
-
-### Deploy from your laptop
+### Deploy (laptop)
 
 ```bash
-databricks bundle validate --target prod --profile YOUR_PROFILE
-databricks bundle deploy --target prod --profile YOUR_PROFILE
-databricks bundle run ask_ui --target prod --profile YOUR_PROFILE
+cd /Users/lucaszago/Downloads/ai_learning/AI-Internship
+
+databricks bundle validate --target prod --profile dbx-lzago-ai
+databricks bundle deploy --target prod --profile dbx-lzago-ai
+databricks bundle run ask_ui --target prod --profile dbx-lzago-ai
 ```
 
-`bundle deploy` uploads code and config. It does **not** restart the process.
-`bundle run ask_ui` starts or restarts the app. Always run both after a code change.
-
-Useful follow-ups:
-
-```bash
-databricks apps get week1v2-ask-ui --profile YOUR_PROFILE
-databricks apps logs week1v2-ask-ui --profile YOUR_PROFILE
-```
-
-### Config files
-
-| File | Role |
+| Command | What it does |
 | --- | --- |
-| `databricks.yml` | Bundle: app name, workspace host, secret resource, env binding, `bundle_owner` |
-| `app.yaml` | Runtime: `python main.py` and `OPENAI_API_KEY` from `value_from: openai_api_key` |
-| `.databricksignore` | Exclude `.env`, `.venv`, `.databricks/` from upload |
+| `bundle validate` | Check YAML |
+| `bundle deploy` | Upload code + config |
+| `bundle run ask_ui` | **Restart** the app (required after code changes) |
 
-`bundle_owner` defaults to `lukaszago@hotmail.com` so CI deploys to the same Workspace
-path as the original app owner. Override with:
+### Check status
 
 ```bash
-databricks bundle deploy --target prod --var="bundle_owner=you@example.com"
+databricks apps get week1v2-ask-ui --profile dbx-lzago-ai
+databricks apps logs week1v2-ask-ui --profile dbx-lzago-ai
 ```
 
-### What is not uploaded
+Wait until state = `RUNNING`, then open:
 
-Local `.env` never goes to Databricks. If Ask returns 503 on the hosted URL, the secret
-scope is missing or the app cannot read it.
+https://week1v2-ask-ui-299177927171866.aws.databricksapps.com
+
+### App resources (auto permissions)
+
+| Resource | Grants |
+| --- | --- |
+| `openai_api_key` | READ secret |
+| `document_chunks_index` | SELECT on AI Search index |
+| `document_chunks_table` | MODIFY on Delta table |
+
+### After deploy — prove live API
+
+Open the app in a browser while logged into Databricks, or use the hosted UI at `/`.
+
+```bash
+# Health
+curl -s https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/health
+
+# Ingest on LIVE URL (not localhost)
+curl -s -X POST https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Remote work: up to 3 days per week with manager approval.", "document_id": "handbook"}'
+```
+
+Wait 1–2 minutes, then hit `/debug/retrieve` and `/ask` on the **same live host**.
+
+### GitHub deploy (optional)
+
+Push to `main` runs `.github/workflows/deploy.yml` if GitHub environment `prod` has:
+
+- `DATABRICKS_HOST`
+- `DATABRICKS_CLIENT_ID`
+- `DATABRICKS_CLIENT_SECRET`
+
+---
+
+## Assignment proof (Maven)
+
+Per the [Session 2 guide](https://tailabs.ai/ai-eng-syllabus/week-2/week-2-rag-assignment-guide), submit to **Maven only** (not LinkedIn):
+
+### What to collect
+
+| # | Proof | How |
+| --- | --- | --- |
+| 1 | Live URL | Databricks App URL (private to Maven) |
+| 2 | Ingest works | curl JSON from **live** `POST /ingest` |
+| 3 | Retrieval works alone | curl JSON from **live** `GET /debug/retrieve?q=...` |
+| 4 | Cited answer | curl JSON from **live** `POST /ask` with a doc question |
+| 5 | Refusal | curl JSON from **live** `POST /ask` with an out-of-docs question |
+| 6 | Streamlit screenshot | Ingest + Ask tabs (API URL in sidebar visible) |
+
+### Exact commands (save the JSON)
+
+Replace `LIVE` with your Databricks App URL.
+
+```bash
+LIVE=https://week1v2-ask-ui-299177927171866.aws.databricksapps.com
+
+# 1) Ingest
+curl -s -X POST "$LIVE/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Remote work: up to 3 days per week with manager approval.", "document_id": "handbook"}' \
+  | tee proof_ingest.json
+
+# Wait 1–2 minutes
+
+# 2) Retrieval only
+curl -s "$LIVE/debug/retrieve?q=remote+work+policy" | tee proof_retrieve.json
+
+# 3) Cited answer
+curl -s -X POST "$LIVE/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the remote work policy?"}' \
+  | tee proof_ask_cited.json
+
+# 4) Refusal
+curl -s -X POST "$LIVE/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the CEO salary?"}' \
+  | tee proof_ask_refusal.json
+```
+
+### What “good” looks like
+
+**Cited ask** — expect something like:
+
+- `"answer"` mentions 3 days / manager approval
+- `"citations": ["handbook"]`
+- `"retrieved_chunk_ids": ["handbook::0"]`
+- `"refused": false`
+
+**Refusal** — expect:
+
+- `"answer": "I don't have enough information to answer that."`
+- `"refused": true`
+
+### Streamlit screenshot
+
+1. API running (local or live URL in sidebar)
+2. **Ingest** tab — success message after ingest
+3. **Ask** tab — cited answer visible
+4. Crop so the URL / result is readable
+
+### Maven paste template
+
+```text
+Session 2 RAG (Databricks AI Search)
+
+Live URL: https://week1v2-ask-ui-….databricksapps.com
+
+1) Ingest:   [paste proof_ingest.json]
+2) Retrieve: [paste proof_retrieve.json]
+3) Cited ask: [paste proof_ask_cited.json]
+4) Refusal:  [paste proof_ask_refusal.json]
+5) Streamlit: [attach screenshot]
+```
+
+### Checklist
+
+- [ ] Session 1 `/ask` still works (extended, not replaced blindly)
+- [ ] `POST /ingest` with `text` + `document_id`
+- [ ] Retrieval tested alone (`/debug/retrieve`)
+- [ ] `/ask` cites sources and refuses when context is missing
+- [ ] Proofs run against **live** Databricks URL (not only localhost)
+- [ ] Streamlit screenshot ready
+- [ ] Submitted to Maven only — no public live URL
+
+---
+
+## Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | — | Embeddings + chat |
+| `RAG_CATALOG` | `workspace` | Catalog |
+| `RAG_SCHEMA` | `document_retrieval` | Schema |
+| `RAG_TABLE` | `document_chunks` | Delta table |
+| `VECTOR_SEARCH_ENDPOINT` | `document-chunks-search-endpoint` | Endpoint |
+| `VECTOR_SEARCH_INDEX` | `…document_chunks_index` | Index (injected on Apps) |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Must match index (1536) |
+| `RAG_CHUNK_SIZE` | `800` | Chunk size |
+| `RAG_CHUNK_OVERLAP` | `100` | Overlap |
+| `RAG_TOP_K` | `5` | Retrieve count |
+| `DATABRICKS_CONFIG_PROFILE` | — | Local CLI profile |
+| `API_URL` | `http://127.0.0.1:8000` | Streamlit → API |
+
+Never commit `.env`.
+
+---
 
 ## Secrets
 
-There are two secret stores. Mixing them up is the usual failure mode.
+| Store | Used by |
+| --- | --- |
+| Laptop `.env` | Local uvicorn / Streamlit |
+| Databricks scope `week1v2` / `openai_api_key` | Hosted app |
+| GitHub `prod` (`DATABRICKS_*`) | CI deploy only |
 
-| Store | Names | Used by |
-| --- | --- | --- |
-| Laptop `.env` | `OPENAI_API_KEY` | Local uvicorn |
-| Databricks secret scope `week1v2` | key `openai_api_key` | Running app |
-| GitHub environment `prod` | `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` | GitHub Actions deploy only |
-
-GitHub does **not** need the OpenAI key. The app reads OpenAI from Databricks at runtime.
-
-## CI and CD
-
-Workflows live in `.github/workflows/` at the repository root (same folder as `main.py`).
-
-| Workflow | File | When | What |
-| --- | --- | --- | --- |
-| CI | `.github/workflows/ci.yml` | Every PR and every push to `main` | `uv sync --frozen` + `smoke_test.py` |
-| Deploy | `.github/workflows/deploy.yml` | Push to `main`, or **Run workflow** | Validate, deploy, restart app, wait until `RUNNING` |
-
-CI never deploys. Deploy never calls OpenAI during the job; it only ships code.
-
-### Will the app update automatically?
-
-Yes, after Deploy succeeds on `main`:
-
-```text
-merge / push to main
-        │
-        ▼
-  GitHub Actions “Deploy”
-        │
-        ├─ databricks bundle validate
-        ├─ databricks bundle deploy --auto-approve
-        ├─ databricks bundle run ask_ui     ← this restarts the app
-        └─ poll databricks apps get until state == RUNNING
-```
-
-Pushes to feature branches do **not** deploy. Manual runs: **Actions → Deploy → Run workflow**
-on branch `main`.
-
-### One-time GitHub setup
-
-1. Databricks: create a **service principal**. Grant **CAN MANAGE** on `week1v2-ask-ui`
-   and **CAN READ** on secret scope `week1v2`.
-2. GitHub: **Settings → Environments → `prod`**. Add secrets (not variables):
-
-   | Secret | Example |
-   | --- | --- |
-   | `DATABRICKS_HOST` | `https://dbc-d3858b75-976f.cloud.databricks.com` |
-   | `DATABRICKS_CLIENT_ID` | Service principal application ID |
-   | `DATABRICKS_CLIENT_SECRET` | Service principal OAuth secret |
-
-3. Auth type in the workflow is `oauth-m2m` (client ID + secret). Databricks also supports
-   [GitHub OIDC](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/cicd-github-actions)
-   if you want to drop the client secret later.
-
-4. If `bundle deploy` returns **409 ALREADY_EXISTS**, bind once from a laptop:
-
-   ```bash
-   databricks bundle deployment bind ask_ui week1v2-ask-ui --target prod --auto-approve
-   ```
-
-### GitHub Action CLI install
-
-The workflow uses:
-
-```yaml
-- uses: databricks/setup-cli@main
-  with:
-    version: 1.12.1
-```
-
-There is **no** `databricks/setup-cli@v1` tag. Using `@v1` fails in **Set up job** before
-any Databricks command runs.
-
-## Project structure
-
-```text
-.
-├── .github/workflows/
-│   ├── ci.yml              # Smoke test
-│   └── deploy.yml          # Bundle deploy + app restart
-├── main.py                 # FastAPI: /, /health, /ask
-├── static/index.html       # Hosted UI (fetch /ask on same origin)
-├── smoke_test.py           # CI: start API, hit /, /health, /docs
-├── app.yaml                # Databricks Apps start command + env
-├── databricks.yml          # Bundle resource + secret
-├── pyproject.toml
-├── uv.lock
-├── .env.example
-├── .gitignore
-├── .databricksignore
-└── README.md
-```
+---
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| Hosted Ask: `OPENAI_API_KEY is not set` | `.env` is local-only | Put key in scope `week1v2` / `openai_api_key`, then `bundle deploy` + `bundle run` |
-| Hosted Ask: 302 HTML login page | UI called a **second** app URL | Use this single-app design; `fetch("/ask")` |
-| Databricks 502 | Wrong host/port | `python main.py` must listen on `0.0.0.0` and `DATABRICKS_APP_PORT` |
-| Local 503 | Missing `.env` | `cp .env.example .env` and set the key |
-| Local 422 | Empty question or bad model name | Use `gpt-4o-mini`, `gpt-4o`, or `o3-mini` |
-| `409 ALREADY_EXISTS` | Bundle tried to create an app that already exists | Bind `ask_ui` to `week1v2-ask-ui`; do not rename the resource key |
-| GitHub Deploy fails in **Set up job** on `@v1` | Invalid action tag | Use `databricks/setup-cli@main` with `version: 1.12.1` (see `deploy.yml`) |
-| Deploy job 403 | SP cannot manage the app | Grant the GitHub SP **CAN MANAGE** on `week1v2-ask-ui` |
-| App deploys but still serves old UI | Skipped `bundle run` | Restart with `databricks bundle run ask_ui --target prod` |
-| Port 8000 in use locally | Another process | Stop it or pass `--port 8001` |
+| Symptom | Fix |
+| --- | --- |
+| `Could not import module "main"` | `cd` to repo root (folder with `main.py`) |
+| Empty retrieve after ingest | Wait 1–2 min for sync |
+| Local ingest 502 / auth errors | `databricks auth login --profile dbx-lzago-ai` |
+| Hosted 503 OpenAI key | Put secret in `week1v2` / `openai_api_key`, redeploy + `bundle run` |
+| Hosted ingest/ask 502 | Redeploy so app SP gets table MODIFY + index SELECT |
+| App serves old code | You forgot `databricks bundle run ask_ui` |
+| Wrong chunks | Fix with `/debug/retrieve` before changing prompts |
+
+---
 
 ## License
 
