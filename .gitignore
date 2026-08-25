@@ -24,3 +24,7 @@ env/
 .idea/
 .vscode/
 .cursor/
+.claude/
+
+# Backups
+*.bak

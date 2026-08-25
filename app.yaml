@@ -3,4 +3,24 @@ command:
   - main.py
 env:
   - name: OPENAI_API_KEY
-    value_from: openai_api_key
+    valueFrom: openai_api_key
+  - name: RAG_CATALOG
+    value: workspace
+  - name: RAG_SCHEMA
+    value: document_retrieval
+  - name: RAG_TABLE
+    value: document_chunks
+  - name: VECTOR_SEARCH_ENDPOINT
+    value: document-chunks-search-endpoint
+  - name: VECTOR_SEARCH_INDEX
+    valueFrom: document_chunks_index
+  - name: EMBEDDING_MODEL
+    value: text-embedding-3-small
+  - name: EMBEDDING_DIMENSIONS
+    value: "1536"
+  - name: RAG_CHUNK_SIZE
+    value: "800"
+  - name: RAG_CHUNK_OVERLAP
+    value: "100"
+  - name: RAG_TOP_K
+    value: "5"

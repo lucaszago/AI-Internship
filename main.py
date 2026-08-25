@@ -1,15 +1,12 @@
-"""Structured Q&A API with a same-origin web UI.
-
-This module exposes a FastAPI app that accepts a question, calls OpenAI with
-structured output, validates the response against the ``Answer`` schema, and
-returns flattened metadata (tokens, cost, latency, retry log).
-
-The UI is served from ``static/index.html`` on the same origin so Databricks
-Apps SSO does not block browser calls to ``/ask``.
+"""Structured Q&A API with RAG ingest, retrieval debug, and same-origin web UI.
 
 Run locally::
 
     uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+Streamlit UI (calls this API)::
+
+    uv run streamlit run ui/streamlit_app.py
 
 On Databricks Apps the runtime calls ``python main.py``, which binds
 ``0.0.0.0:$DATABRICKS_APP_PORT``.
@@ -21,10 +18,26 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
+
+from rag.config import load_rag_config
+from rag.routes import (
+    AskResponse,
+    AttemptResult,
+    DebugRetrieveResponse,
+    IngestRequest,
+    IngestResponse,
+    ModelName,
+    DEFAULT_MODEL,
+    compute_cost_usd,
+    handle_debug_retrieve,
+    handle_ingest,
+    handle_rag_ask,
+    usage_counts,
+)
 
 THIS_DIR = Path(__file__).resolve().parent
 load_dotenv(THIS_DIR / ".env")
@@ -33,17 +46,9 @@ load_dotenv(THIS_DIR.parent / ".env")
 app = FastAPI(title="Week 1 v2 /ask Demo")
 _client: OpenAI | None = None
 
-ModelName = Literal["gpt-4o-mini", "gpt-4o", "o3-mini"]
-DEFAULT_MODEL: ModelName = "gpt-4o-mini"
-MODEL_PRICES_PER_1K: dict[str, tuple[float, float]] = {
-    "gpt-4o": (0.0025, 0.01),
-    "gpt-4o-mini": (0.00015, 0.0006),
-    "o3-mini": (0.0011, 0.0044),
-}
-
 
 class Answer(BaseModel):
-    """Structured output schema enforced by OpenAI on each attempt."""
+    """Structured output schema for the Session 1 non-RAG guardrail demo."""
 
     answer: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -51,101 +56,47 @@ class Answer(BaseModel):
 
 
 class AskRequest(BaseModel):
-    """Incoming ``POST /ask`` payload."""
-
     question: str = Field(min_length=1)
     model: ModelName | None = None
     force_bad: bool = False
 
 
-class AttemptResult(BaseModel):
-    """One validation attempt recorded in the ``/ask`` retry log."""
-
-    attempt: int
-    step: str
-    ok: bool
-    message: str
-    raw_output: str | None = None
-    validation_error: str | None = None
-
-
-class AskResponse(BaseModel):
-    """Public HTTP response for ``POST /ask``.
-
-    Flattens the nested ``Answer`` fields (``confidence`` → ``confidence_score``)
-    and adds usage metadata required by the bootcamp assignment contract.
-    """
-
-    answer: str
-    tokens_used: int
-    cost_usd: float
-    confidence_score: float = Field(ge=0.0, le=1.0)
-    sources_needed: bool
-    model: str
-    latency_ms: int
-    attempts: list[AttemptResult]
-
-
 @app.get("/", include_in_schema=False)
 def ui() -> FileResponse:
-    """Serve the hosted chat UI from the same origin as ``/ask``."""
     return FileResponse(THIS_DIR / "static" / "index.html")
 
 
 @app.get("/health")
-def health() -> dict[str, str | bool]:
-    """Liveness probe that does not call OpenAI."""
+def health() -> dict[str, str | bool | dict[str, str | int]]:
+    rag = load_rag_config()
     return {
         "status": "ok",
         "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "rag_configured": bool(rag.vector_search_index and rag.full_table_name),
+        "rag": rag.to_dict(),
     }
 
 
 def get_client() -> OpenAI:
-    """Return a lazily initialized OpenAI client."""
     global _client
     if _client is None:
         _client = OpenAI()
     return _client
 
 
-def compute_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """Estimate USD cost from hardcoded per-1K token prices in ``MODEL_PRICES_PER_1K``."""
-    input_per_1k, output_per_1k = MODEL_PRICES_PER_1K.get(
-        model, MODEL_PRICES_PER_1K[DEFAULT_MODEL]
-    )
-    return (prompt_tokens / 1000 * input_per_1k) + (
-        completion_tokens / 1000 * output_per_1k
-    )
-
-
-def usage_counts(completion) -> tuple[int, int, int]:
-    """Return ``(total_tokens, prompt_tokens, completion_tokens)`` from a completion."""
-    usage = completion.usage
-    if usage is None:
-        return 0, 0, 0
-    return usage.total_tokens, usage.prompt_tokens, usage.completion_tokens
-
-
 def call_structured_model(question: str, model: ModelName) -> tuple[Answer, int, int, int]:
-    """Call OpenAI with ``response_format=Answer`` and return parsed output plus token counts."""
     completion = get_client().chat.completions.parse(
         model=model,
         messages=[{"role": "user", "content": question}],
         response_format=Answer,
     )
-
     parsed = completion.choices[0].message.parsed
     if parsed is None:
         raise ValueError("Model returned no parseable structured output")
-
-    total_tokens, prompt_tokens, completion_tokens = usage_counts(completion)
-    return parsed, total_tokens, prompt_tokens, completion_tokens
+    return parsed, *usage_counts(completion)
 
 
 def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int, int, int]:
-    """Return intentionally invalid JSON for the guardrail demo when ``force_bad`` is set."""
-
     completion = get_client().chat.completions.create(
         model=model,
         messages=[
@@ -159,19 +110,27 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
             }
         ],
     )
-
     raw = completion.choices[0].message.content or ""
-    total_tokens, prompt_tokens, completion_tokens = usage_counts(completion)
-    return raw, total_tokens, prompt_tokens, completion_tokens
+    return raw, *usage_counts(completion)
 
 
-@app.post("/ask")
+@app.post("/ingest", response_model=IngestResponse)
+def ingest(body: IngestRequest) -> IngestResponse:
+    """Chunk, embed, write to Delta, and sync the AI Search index."""
+    return handle_ingest(body)
+
+
+@app.get("/debug/retrieve", response_model=DebugRetrieveResponse)
+def debug_retrieve(q: str = Query(min_length=1)) -> DebugRetrieveResponse:
+    """Return top-k chunks for a question without calling the LLM."""
+    return handle_debug_retrieve(q)
+
+
+@app.post("/ask", response_model=AskResponse)
 def ask(body: AskRequest) -> AskResponse:
-    """Answer a question with up to two attempts and a structured retry log.
+    """Answer using RAG (Databricks AI Search + grounded generation).
 
-    When ``force_bad`` is true, attempt 1 uses plain JSON that should fail
-    validation; attempt 2 falls back to structured output. Returns 503 if the
-    API key is missing and 502 if both attempts fail validation.
+    When ``force_bad`` is true, runs the Session 1 guardrail demo without retrieval.
     """
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
@@ -180,23 +139,37 @@ def ask(body: AskRequest) -> AskResponse:
         )
 
     model = body.model or DEFAULT_MODEL
+    start = time.perf_counter()
+
+    if not body.force_bad:
+        try:
+            return handle_rag_ask(get_client(), body.question, model, start)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"RAG response failed validation: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"RAG ask failed: {exc}",
+            ) from exc
+
     last_error: str | None = None
     attempts: list[AttemptResult] = []
     total_tokens_used = 0
     total_prompt_tokens = 0
     total_completion_tokens = 0
-    start = time.perf_counter()
 
     for attempt in range(2):
         try:
-            if body.force_bad and attempt == 0:
+            if attempt == 0:
                 raw, tokens_used, prompt_tokens, completion_tokens = call_malformed_json_once(
                     body.question, model
                 )
                 total_tokens_used += tokens_used
                 total_prompt_tokens += prompt_tokens
                 total_completion_tokens += completion_tokens
-
                 try:
                     answer = Answer.model_validate_json(raw)
                 except ValidationError as exc:
@@ -212,7 +185,6 @@ def ask(body: AskRequest) -> AskResponse:
                         )
                     )
                     continue
-
                 attempts.append(
                     AttemptResult(
                         attempt=attempt + 1,
@@ -238,18 +210,16 @@ def ask(body: AskRequest) -> AskResponse:
                     )
                 )
 
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            cost_usd = compute_cost_usd(
-                model, total_prompt_tokens, total_completion_tokens
-            )
             return AskResponse(
                 answer=answer.answer,
                 tokens_used=total_tokens_used,
-                cost_usd=round(cost_usd, 6),
+                cost_usd=round(
+                    compute_cost_usd(model, total_prompt_tokens, total_completion_tokens), 6
+                ),
                 confidence_score=answer.confidence,
                 sources_needed=answer.sources_needed,
                 model=model,
-                latency_ms=latency_ms,
+                latency_ms=int((time.perf_counter() - start) * 1000),
                 attempts=attempts,
             )
         except (ValidationError, ValueError) as exc:
