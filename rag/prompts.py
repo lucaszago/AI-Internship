@@ -22,7 +22,9 @@ def build_grounding_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
     return f"""Answer using ONLY the context below.
 If the context does not contain the answer, respond with exactly:
 "{REFUSAL_PHRASE}"
-When you answer from the context, cite the document_id of each chunk you used in cited_document_ids.
+When you answer from the context:
+- put each chunk's document_id in cited_document_ids
+- put each chunk's chunk_id in cited_chunk_ids (from the [chunk_id=...] labels)
 Set sources_needed to true when you used context chunks, false when refusing.
 
 Context:

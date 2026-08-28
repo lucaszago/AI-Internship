@@ -10,14 +10,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+LIVE_APP_URL = "https://week1v2-ask-ui-299177927171866.aws.databricksapps.com"
+DEFAULT_API_URL = os.getenv("API_URL", LIVE_APP_URL)
 
 st.set_page_config(page_title="RAG Demo", layout="wide")
 st.title("Session 2 RAG Demo")
 st.caption("Ingest documents and ask questions via your FastAPI service.")
 
 api_url = st.sidebar.text_input("API base URL", DEFAULT_API_URL.rstrip("/"))
-st.sidebar.markdown("Set `API_URL` in `.env` for your Databricks App URL.")
+st.sidebar.caption(
+    "Default is the deployed Databricks App. Use http://127.0.0.1:8000 for local API."
+)
 
 ingest_tab, ask_tab, debug_tab = st.tabs(["Ingest", "Ask", "Debug retrieve"])
 
@@ -53,8 +56,10 @@ with ask_tab:
             if data.get("refused"):
                 st.warning("Refusal response")
             st.markdown("**Citations (document_id):** " + ", ".join(data.get("citations", [])))
-            st.markdown("**Retrieved chunk IDs:**")
-            st.code("\n".join(data.get("retrieved_chunk_ids", [])) or "(none)")
+            st.markdown(
+                "**Cited chunk IDs:** "
+                + ", ".join(data.get("cited_chunk_ids", []) or data.get("retrieved_chunk_ids", []))
+            )
             with st.expander("Full JSON"):
                 st.json(data)
         except httpx.HTTPError as exc:

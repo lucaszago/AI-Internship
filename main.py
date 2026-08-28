@@ -9,7 +9,10 @@ Streamlit UI (calls this API)::
     uv run streamlit run ui/streamlit_app.py
 
 On Databricks Apps the runtime calls ``python main.py``, which binds
-``0.0.0.0:$DATABRICKS_APP_PORT``.
+``0.0.0.0:$PORT`` (Render) or ``0.0.0.0:$DATABRICKS_APP_PORT``.
+
+API routes are mounted at ``/`` (browser UI, same-origin) and ``/api/``
+(Databricks M2M token access — see README grader section).
 """
 
 import os
@@ -18,7 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
@@ -43,8 +46,17 @@ THIS_DIR = Path(__file__).resolve().parent
 load_dotenv(THIS_DIR / ".env")
 load_dotenv(THIS_DIR.parent / ".env")
 
-app = FastAPI(title="Week 1 v2 /ask Demo")
+app = FastAPI(
+    title="Week 1 v2 /ask Demo",
+    description=(
+        "Session 2 RAG API. Browser UI at `/`. "
+        "For programmatic access on Databricks Apps use `/api/*` with a Bearer token."
+    ),
+)
+router = APIRouter()
 _client: OpenAI | None = None
+
+LIVE_APP_URL = "https://week1v2-ask-ui-299177927171866.aws.databricksapps.com"
 
 
 class Answer(BaseModel):
@@ -61,12 +73,12 @@ class AskRequest(BaseModel):
     force_bad: bool = False
 
 
-@app.get("/", include_in_schema=False)
+@router.get("/", include_in_schema=False)
 def ui() -> FileResponse:
     return FileResponse(THIS_DIR / "static" / "index.html")
 
 
-@app.get("/health")
+@router.get("/health")
 def health() -> dict[str, str | bool | dict[str, str | int]]:
     rag = load_rag_config()
     return {
@@ -74,6 +86,8 @@ def health() -> dict[str, str | bool | dict[str, str | int]]:
         "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
         "rag_configured": bool(rag.vector_search_index and rag.full_table_name),
         "rag": rag.to_dict(),
+        "api_prefix": "/api",
+        "live_url": LIVE_APP_URL,
     }
 
 
@@ -114,19 +128,19 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
     return raw, *usage_counts(completion)
 
 
-@app.post("/ingest", response_model=IngestResponse)
+@router.post("/ingest", response_model=IngestResponse)
 def ingest(body: IngestRequest) -> IngestResponse:
     """Chunk, embed, write to Delta, and sync the AI Search index."""
     return handle_ingest(body)
 
 
-@app.get("/debug/retrieve", response_model=DebugRetrieveResponse)
+@router.get("/debug/retrieve", response_model=DebugRetrieveResponse)
 def debug_retrieve(q: str = Query(min_length=1)) -> DebugRetrieveResponse:
     """Return top-k chunks for a question without calling the LLM."""
     return handle_debug_retrieve(q)
 
 
-@app.post("/ask", response_model=AskResponse)
+@router.post("/ask", response_model=AskResponse)
 def ask(body: AskRequest) -> AskResponse:
     """Answer using RAG (Databricks AI Search + grounded generation).
 
@@ -240,8 +254,15 @@ def ask(body: AskRequest) -> AskResponse:
     )
 
 
+# Same routes at / and /api/* (Databricks M2M expects /api/ prefix).
+app.include_router(router)
+app.include_router(router, prefix="/api")
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("DATABRICKS_APP_PORT", "8000"))
+    port = int(
+        os.environ.get("PORT", os.environ.get("DATABRICKS_APP_PORT", "8000"))
+    )
     uvicorn.run(app, host="0.0.0.0", port=port)
