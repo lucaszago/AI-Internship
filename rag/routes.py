@@ -54,6 +54,7 @@ class RagAnswer(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     sources_needed: bool
     cited_document_ids: list[str] = Field(default_factory=list)
+    cited_chunk_ids: list[str] = Field(default_factory=list)
 
 
 class AttemptResult(BaseModel):
@@ -75,6 +76,7 @@ class AskResponse(BaseModel):
     latency_ms: int
     attempts: list[AttemptResult]
     citations: list[str] = Field(default_factory=list)
+    cited_chunk_ids: list[str] = Field(default_factory=list)
     retrieved_chunk_ids: list[str] = Field(default_factory=list)
     refused: bool = False
 
@@ -191,6 +193,13 @@ def handle_rag_ask(
     total_tokens += embed_tokens
 
     citations = list(dict.fromkeys(answer.cited_document_ids))
+    cited_chunk_ids = list(dict.fromkeys(answer.cited_chunk_ids))
+    if not cited_chunk_ids and citations and retrieved_chunk_ids:
+        cited_chunk_ids = [
+            chunk_id
+            for chunk_id in retrieved_chunk_ids
+            if any(chunk_id.startswith(f"{doc_id}::") for doc_id in citations)
+        ]
     refused = is_refusal(answer.answer)
 
     return AskResponse(
@@ -210,6 +219,7 @@ def handle_rag_ask(
             )
         ],
         citations=citations,
+        cited_chunk_ids=cited_chunk_ids,
         retrieved_chunk_ids=retrieved_chunk_ids,
         refused=refused,
     )

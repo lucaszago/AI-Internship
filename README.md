@@ -18,9 +18,10 @@ Do **not** post the live URL publicly (LinkedIn, etc.). Use it only for Maven su
 4. [API reference](#api-reference)
 5. [Streamlit UI](#streamlit-ui)
 6. [Deploy to Databricks](#deploy-to-databricks)
-7. [Assignment proof (Maven)](#assignment-proof-maven)
-8. [Environment variables](#environment-variables)
-9. [Troubleshooting](#troubleshooting)
+7. [Grader / automated live tests](#grader--automated-live-tests)
+8. [Assignment proof (Maven)](#assignment-proof-maven)
+9. [Environment variables](#environment-variables)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -289,6 +290,42 @@ Wait until state = `RUNNING`, then open:
 
 https://week1v2-ask-ui-299177927171866.aws.databricksapps.com
 
+---
+
+## Grader / automated live tests
+
+**Why automated curl failed:** Databricks Apps sit behind SSO. Unauthenticated requests to `/health`, `/ingest`, etc. return the **Sign In HTML page** (HTTP 200), not JSON. That is what the TAI Labs grader hit.
+
+**Fixes in this repo:**
+
+| Change | Purpose |
+| --- | --- |
+| Routes also at `/api/*` | Databricks M2M API access with Bearer token ([docs](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)) |
+| Streamlit default URL | Points at live Databricks App, not localhost |
+| `cited_chunk_ids` in `/ask` | Explicit chunk ID citations in the response |
+| `render.yaml` | Optional **public** deploy for graders (no SSO) |
+
+### Option A — Databricks App (browser / Maven with Swagger JSON)
+
+Use authenticated Swagger at `/docs` and paste JSON responses into Maven. Terminal curl without login will still fail.
+
+Programmatic access (Postman, scripts):
+
+```bash
+TOKEN=$(databricks auth token --profile dbx-lzago-ai | jq -r .access_token)
+
+curl -H "Authorization: Bearer $TOKEN" \
+  'https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/api/health'
+```
+
+### Option B — Public Render URL (recommended for automated graders)
+
+1. Create a Render Web Service from this repo (`render.yaml`).
+2. Set dashboard secrets: `OPENAI_API_KEY`, `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`.
+3. Submit the Render URL to Maven as the **live URL** — `/health`, `/ingest`, `/ask` return JSON without sign-in.
+
+---
+
 ### App resources (auto permissions)
 
 | Resource | Grants |
@@ -299,19 +336,9 @@ https://week1v2-ask-ui-299177927171866.aws.databricksapps.com
 
 ### After deploy — prove live API
 
-Open the app in a browser while logged into Databricks, or use the hosted UI at `/`.
+Open the app in a browser while logged into Databricks, or use Swagger at `/docs`.
 
-```bash
-# Health
-curl -s https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/health
-
-# Ingest on LIVE URL (not localhost)
-curl -s -X POST https://week1v2-ask-ui-299177927171866.aws.databricksapps.com/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Remote work: up to 3 days per week with manager approval.", "document_id": "handbook"}'
-```
-
-Wait 1–2 minutes, then hit `/debug/retrieve` and `/ask` on the **same live host**.
+Wait 1–2 minutes after ingest, then test `/debug/retrieve` and `/ask`.
 
 ### GitHub deploy (optional)
 

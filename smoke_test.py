@@ -60,6 +60,11 @@ def main() -> int:
             print(f"FAIL: /docs returned HTTP {docs_response.status_code}")
             return 1
 
+        api_health = httpx.get(f"{base_url}/api/health", timeout=2.0)
+        if api_health.status_code != 200:
+            print(f"FAIL: /api/health returned HTTP {api_health.status_code}")
+            return 1
+
         ui_response = httpx.get(f"{base_url}/", timeout=2.0)
         if ui_response.status_code != 200 or "Q&A Demo" not in ui_response.text:
             print(f"FAIL: / returned HTTP {ui_response.status_code}")
