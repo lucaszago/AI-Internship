@@ -1,9 +1,4 @@
-"""RAG object names and settings loaded from environment variables.
-
-Local development: set values in ``.env`` (see ``.env.example``).
-Databricks Apps: ``databricks.yml`` / ``app.yaml`` inject env vars; the vector
-search index name comes from the ``document_chunks_index`` app resource.
-"""
+"""RAG settings loaded from environment variables (Pinecone + OpenAI)."""
 
 from __future__ import annotations
 
@@ -13,45 +8,26 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RagConfig:
-    """Unity Catalog and AI Search names used by the RAG pipeline."""
+    """Pinecone index and embedding settings used by the RAG pipeline."""
 
-    catalog: str
-    schema: str
-    table: str
-    full_table_name: str
-    vector_search_endpoint: str
-    vector_search_index: str
+    pinecone_api_key: str
+    pinecone_index: str
     embedding_model: str
     embedding_dimensions: int
 
-    def to_dict(self) -> dict[str, str | int]:
+    def to_dict(self) -> dict[str, str | int | bool]:
         return {
-            "catalog": self.catalog,
-            "schema": self.schema,
-            "table": self.table,
-            "full_table_name": self.full_table_name,
-            "vector_search_endpoint": self.vector_search_endpoint,
-            "vector_search_index": self.vector_search_index,
+            "pinecone_index": self.pinecone_index,
+            "pinecone_configured": bool(self.pinecone_api_key),
             "embedding_model": self.embedding_model,
             "embedding_dimensions": self.embedding_dimensions,
         }
 
     @classmethod
     def from_env(cls) -> RagConfig:
-        catalog = os.getenv("RAG_CATALOG", "workspace")
-        schema = os.getenv("RAG_SCHEMA", "document_retrieval")
-        table = os.getenv("RAG_TABLE", "document_chunks")
-        default_index = f"{catalog}.{schema}.{table}_index"
-
         return cls(
-            catalog=catalog,
-            schema=schema,
-            table=table,
-            full_table_name=f"{catalog}.{schema}.{table}",
-            vector_search_endpoint=os.getenv(
-                "VECTOR_SEARCH_ENDPOINT", "document-chunks-search-endpoint"
-            ),
-            vector_search_index=os.getenv("VECTOR_SEARCH_INDEX", default_index),
+            pinecone_api_key=os.getenv("PINECONE_API_KEY", ""),
+            pinecone_index=os.getenv("PINECONE_INDEX_NAME", "document-chunks"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
             embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "1536")),
         )

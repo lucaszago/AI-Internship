@@ -1,35 +1,22 @@
-# Public web service for automated grader access (no Databricks SSO).
-# Set secrets in the Render dashboard before deploy.
+# Public web service (no SSO) — set secrets in the Render dashboard.
 services:
   - type: web
     name: week1v2-ask-api-public
     runtime: python
     plan: free
-    buildCommand: pip install uv && uv sync --frozen
-    startCommand: uv run python main.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
-      - key: RAG_CATALOG
-        value: workspace
-      - key: RAG_SCHEMA
-        value: document_retrieval
-      - key: RAG_TABLE
-        value: document_chunks
-      - key: VECTOR_SEARCH_ENDPOINT
-        value: document-chunks-search-endpoint
-      - key: VECTOR_SEARCH_INDEX
-        value: workspace.document_retrieval.document_chunks_index
+      - key: PINECONE_INDEX_NAME
+        value: document-chunks
       - key: EMBEDDING_MODEL
         value: text-embedding-3-small
       - key: EMBEDDING_DIMENSIONS
         value: "1536"
       - key: OPENAI_API_KEY
         sync: false
-      - key: DATABRICKS_HOST
-        sync: false
-      - key: DATABRICKS_CLIENT_ID
-        sync: false
-      - key: DATABRICKS_CLIENT_SECRET
+      - key: PINECONE_API_KEY
         sync: false

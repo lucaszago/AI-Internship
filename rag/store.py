@@ -1,46 +1,47 @@
-"""Write embedded chunks to the Unity Catalog Delta source table."""
+"""Upsert and delete document chunks in Pinecone."""
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
-from databricks.connect import DatabricksSession
-from pyspark.sql import Row
-from pyspark.sql.types import ArrayType, FloatType, IntegerType, StringType, StructField, StructType
+from pinecone import Pinecone
+from pinecone.exceptions import NotFoundException, PineconeApiException
 
 from rag.config import load_rag_config
 
-CHUNK_SCHEMA = StructType(
-    [
-        StructField("id", StringType(), nullable=False),
-        StructField("document_id", StringType(), nullable=False),
-        StructField("chunk_index", IntegerType(), nullable=False),
-        StructField("chunk_text", StringType(), nullable=False),
-        StructField("source", StringType(), nullable=True),
-        StructField("text_vector", ArrayType(FloatType()), nullable=True),
-    ]
-)
+# Default namespace — empty string is Pinecone's standard default.
+NAMESPACE = ""
 
 
 @lru_cache(maxsize=1)
-def get_spark():
-    """Return a Databricks Connect Spark session (local profile or app runtime)."""
-    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-    builder = DatabricksSession.builder
-    if profile:
-        builder = builder.profile(profile)
-    return builder.serverless().getOrCreate()
+def get_pinecone_index():
+    """Return a Pinecone Index client."""
+    config = load_rag_config()
+    if not config.pinecone_api_key:
+        raise RuntimeError("PINECONE_API_KEY is not set.")
+    client = Pinecone(api_key=config.pinecone_api_key)
+    return client.index(name=config.pinecone_index)
 
 
 def delete_document_chunks(document_id: str) -> None:
-    """Remove existing chunks for ``document_id`` before re-ingest."""
-    config = load_rag_config()
-    spark = get_spark()
-    escaped = document_id.replace("'", "''")
-    spark.sql(
-        f"DELETE FROM {config.full_table_name} WHERE document_id = '{escaped}'"
-    )
+    """Remove existing vectors for ``document_id`` before re-ingest.
+
+    An empty index has no namespace yet, so Pinecone may return 404 on delete.
+    That is safe to ignore on first ingest.
+    """
+    index = get_pinecone_index()
+    try:
+        index.delete(
+            filter={"document_id": {"$eq": document_id}},
+            namespace=NAMESPACE,
+        )
+    except NotFoundException:
+        return
+    except PineconeApiException as exc:
+        # Serverless: "[404] Namespace not found" on first write.
+        if getattr(exc, "status", None) == 404 or "Namespace not found" in str(exc):
+            return
+        raise
 
 
 def append_chunks(
@@ -49,30 +50,29 @@ def append_chunks(
     vectors: list[list[float]],
     source: str | None = None,
 ) -> int:
-    """Append chunked rows with embeddings to the Delta table."""
+    """Upsert chunked rows with embeddings into Pinecone."""
     if len(chunks) != len(vectors):
         raise ValueError("chunks and vectors length mismatch")
 
-    config = load_rag_config()
-    rows = [
-        Row(
-            id=f"{document_id}::{index}",
-            document_id=document_id,
-            chunk_index=index,
-            chunk_text=chunk_text,
-            source=source,
-            text_vector=vector,
-        )
-        for index, (chunk_text, vector) in enumerate(zip(chunks, vectors, strict=True))
-    ]
-    if not rows:
+    if not chunks:
         return 0
 
-    spark = get_spark()
-    (
-        spark.createDataFrame(rows, schema=CHUNK_SCHEMA)
-        .write.format("delta")
-        .mode("append")
-        .saveAsTable(config.full_table_name)
-    )
-    return len(rows)
+    records = []
+    for chunk_index, (chunk_text, vector) in enumerate(zip(chunks, vectors, strict=True)):
+        metadata: dict[str, str | int] = {
+            "document_id": document_id,
+            "chunk_index": chunk_index,
+            "chunk_text": chunk_text,
+        }
+        if source:
+            metadata["source"] = source
+        records.append(
+            {
+                "id": f"{document_id}::{chunk_index}",
+                "values": vector,
+                "metadata": metadata,
+            }
+        )
+
+    get_pinecone_index().upsert(vectors=records, namespace=NAMESPACE)
+    return len(records)

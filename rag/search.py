@@ -1,16 +1,13 @@
-"""Databricks AI Search sync and similarity query."""
+"""Pinecone similarity query."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 
-from databricks.sdk import WorkspaceClient
+from rag.store import get_pinecone_index
 
-from rag.config import load_rag_config
-
-RETRIEVAL_COLUMNS = ["id", "document_id", "chunk_text", "source"]
+RETRIEVAL_METADATA = ("document_id", "chunk_text", "source")
 
 
 @dataclass(frozen=True)
@@ -22,50 +19,33 @@ class RetrievedChunk:
     score: float | None
 
 
-@lru_cache(maxsize=1)
-def get_workspace_client() -> WorkspaceClient:
-    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-    if profile:
-        return WorkspaceClient(profile=profile)
-    return WorkspaceClient()
-
-
 def top_k() -> int:
     return int(os.getenv("RAG_TOP_K", "5"))
 
 
-def sync_index() -> None:
-    config = load_rag_config()
-    get_workspace_client().vector_search_indexes.sync_index(
-        index_name=config.vector_search_index
-    )
-
-
-def _row_to_chunk(column_names: list[str], row: list) -> RetrievedChunk:
-    values = dict(zip(column_names, row, strict=False))
-    score = values.get("score")
-    return RetrievedChunk(
-        id=str(values.get("id", "")),
-        document_id=str(values.get("document_id", "")),
-        chunk_text=str(values.get("chunk_text", "")),
-        source=values.get("source") if values.get("source") is not None else None,
-        score=float(score) if score is not None else None,
-    )
-
-
 def query_chunks(query_vector: list[float], num_results: int | None = None) -> list[RetrievedChunk]:
     """Return top similar chunks for a query embedding."""
-    config = load_rag_config()
     k = num_results or top_k()
-    response = get_workspace_client().vector_search_indexes.query_index(
-        index_name=config.vector_search_index,
-        columns=RETRIEVAL_COLUMNS,
-        query_vector=query_vector,
-        num_results=k,
+    response = get_pinecone_index().query(
+        vector=query_vector,
+        top_k=k,
+        include_metadata=True,
+        namespace="",
     )
 
-    if not response.result or not response.result.data_array:
-        return []
-
-    column_names = [column.name for column in response.manifest.columns]
-    return [_row_to_chunk(column_names, row) for row in response.result.data_array]
+    matches = response.get("matches") or getattr(response, "matches", None) or []
+    chunks: list[RetrievedChunk] = []
+    for match in matches:
+        metadata = match.get("metadata") if isinstance(match, dict) else (match.metadata or {})
+        match_id = match.get("id") if isinstance(match, dict) else match.id
+        score = match.get("score") if isinstance(match, dict) else match.score
+        chunks.append(
+            RetrievedChunk(
+                id=str(match_id or ""),
+                document_id=str(metadata.get("document_id", "")),
+                chunk_text=str(metadata.get("chunk_text", "")),
+                source=metadata.get("source"),
+                score=float(score) if score is not None else None,
+            )
+        )
+    return chunks

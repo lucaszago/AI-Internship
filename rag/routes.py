@@ -111,7 +111,7 @@ def require_openai_key() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY is not set. Add it as a Databricks App secret, or put it in local .env.",
+            detail="OPENAI_API_KEY is not set. Put it in local .env or Render environment variables.",
         )
 
 
@@ -215,7 +215,7 @@ def handle_rag_ask(
                 attempt=1,
                 step="rag_structured_output",
                 ok=True,
-                message=f"Retrieved {len(chunks)} chunks from Databricks AI Search.",
+                message=f"Retrieved {len(chunks)} chunks from Pinecone.",
             )
         ],
         citations=citations,

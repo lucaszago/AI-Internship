@@ -16,9 +16,6 @@ venv/
 .venv/
 env/
 
-# Databricks local state
-.databricks/
-
 # OS / editor
 .DS_Store
 .idea/
