@@ -8,11 +8,9 @@ Streamlit UI (calls this API)::
 
     uv run streamlit run ui/streamlit_app.py
 
-On Databricks Apps the runtime calls ``python main.py``, which binds
-``0.0.0.0:$PORT`` (Render) or ``0.0.0.0:$DATABRICKS_APP_PORT``.
+On Render the start command is::
 
-API routes are mounted at ``/`` (browser UI, same-origin) and ``/api/``
-(Databricks M2M token access — see README grader section).
+    uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 
 import os
@@ -48,15 +46,10 @@ load_dotenv(THIS_DIR.parent / ".env")
 
 app = FastAPI(
     title="Week 1 v2 /ask Demo",
-    description=(
-        "Session 2 RAG API. Browser UI at `/`. "
-        "For programmatic access on Databricks Apps use `/api/*` with a Bearer token."
-    ),
+    description="Session 2 RAG API with Pinecone retrieval. Browser UI at `/`.",
 )
 router = APIRouter()
 _client: OpenAI | None = None
-
-LIVE_APP_URL = "https://week1v2-ask-ui-299177927171866.aws.databricksapps.com"
 
 
 class Answer(BaseModel):
@@ -79,15 +72,13 @@ def ui() -> FileResponse:
 
 
 @router.get("/health")
-def health() -> dict[str, str | bool | dict[str, str | int]]:
+def health() -> dict[str, str | bool | dict[str, str | int | bool]]:
     rag = load_rag_config()
     return {
         "status": "ok",
         "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
-        "rag_configured": bool(rag.vector_search_index and rag.full_table_name),
+        "rag_configured": bool(rag.pinecone_api_key and rag.pinecone_index),
         "rag": rag.to_dict(),
-        "api_prefix": "/api",
-        "live_url": LIVE_APP_URL,
     }
 
 
@@ -130,7 +121,7 @@ def call_malformed_json_once(question: str, model: ModelName) -> tuple[str, int,
 
 @router.post("/ingest", response_model=IngestResponse)
 def ingest(body: IngestRequest) -> IngestResponse:
-    """Chunk, embed, write to Delta, and sync the AI Search index."""
+    """Chunk, embed, and upsert into Pinecone."""
     return handle_ingest(body)
 
 
@@ -142,14 +133,14 @@ def debug_retrieve(q: str = Query(min_length=1)) -> DebugRetrieveResponse:
 
 @router.post("/ask", response_model=AskResponse)
 def ask(body: AskRequest) -> AskResponse:
-    """Answer using RAG (Databricks AI Search + grounded generation).
+    """Answer using RAG (Pinecone + grounded generation).
 
     When ``force_bad`` is true, runs the Session 1 guardrail demo without retrieval.
     """
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY is not set. Add it as a Databricks App secret, or put it in local .env.",
+            detail="OPENAI_API_KEY is not set. Put it in local .env or Render environment variables.",
         )
 
     model = body.model or DEFAULT_MODEL
@@ -254,15 +245,11 @@ def ask(body: AskRequest) -> AskResponse:
     )
 
 
-# Same routes at / and /api/* (Databricks M2M expects /api/ prefix).
 app.include_router(router)
-app.include_router(router, prefix="/api")
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(
-        os.environ.get("PORT", os.environ.get("DATABRICKS_APP_PORT", "8000"))
-    )
+    port = int(os.environ.get("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)

@@ -10,8 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LIVE_APP_URL = "https://week1v2-ask-ui-299177927171866.aws.databricksapps.com"
-DEFAULT_API_URL = os.getenv("API_URL", LIVE_APP_URL)
+DEFAULT_API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="RAG Demo", layout="wide")
 st.title("Session 2 RAG Demo")
@@ -19,7 +18,7 @@ st.caption("Ingest documents and ask questions via your FastAPI service.")
 
 api_url = st.sidebar.text_input("API base URL", DEFAULT_API_URL.rstrip("/"))
 st.sidebar.caption(
-    "Default is the deployed Databricks App. Use http://127.0.0.1:8000 for local API."
+    "Default is local API. After Render deploy, paste your public URL here."
 )
 
 ingest_tab, ask_tab, debug_tab = st.tabs(["Ingest", "Ask", "Debug retrieve"])
@@ -41,24 +40,26 @@ with ingest_tab:
 
 with ask_tab:
     question = st.text_input("Question", value="What is the remote work policy?")
-    model = st.selectbox("Model", ["gpt-4o-mini", "gpt-4o", "o3-mini"])
     if st.button("Ask", type="primary"):
         try:
             response = httpx.post(
                 f"{api_url}/ask",
-                json={"question": question, "model": model},
+                json={"question": question},
                 timeout=120.0,
             )
             response.raise_for_status()
             data = response.json()
             st.subheader("Answer")
             st.write(data.get("answer"))
-            if data.get("refused"):
-                st.warning("Refusal response")
-            st.markdown("**Citations (document_id):** " + ", ".join(data.get("citations", [])))
-            st.markdown(
-                "**Cited chunk IDs:** "
-                + ", ".join(data.get("cited_chunk_ids", []) or data.get("retrieved_chunk_ids", []))
+            cols = st.columns(4)
+            cols[0].metric("tokens_used", data.get("tokens_used"))
+            cols[1].metric("cost_usd", data.get("cost_usd"))
+            cols[2].metric("confidence", data.get("confidence_score"))
+            cols[3].metric("refused", str(data.get("refused")))
+            st.write("citations:", data.get("citations"))
+            st.write(
+                "cited_chunk_ids:",
+                data.get("cited_chunk_ids") or data.get("retrieved_chunk_ids"),
             )
             with st.expander("Full JSON"):
                 st.json(data)
@@ -66,19 +67,15 @@ with ask_tab:
             st.error(f"Ask failed: {exc}")
 
 with debug_tab:
-    debug_q = st.text_input("Debug question", value="What is the remote work policy?")
-    if st.button("Retrieve only"):
+    q = st.text_input("Retrieve query", value="remote work policy", key="debug_q")
+    if st.button("Retrieve", type="primary"):
         try:
             response = httpx.get(
                 f"{api_url}/debug/retrieve",
-                params={"q": debug_q},
+                params={"q": q},
                 timeout=60.0,
             )
             response.raise_for_status()
-            data = response.json()
-            for chunk in data.get("chunks", []):
-                st.markdown(f"**{chunk['id']}** (score={chunk.get('score')})")
-                st.write(chunk.get("chunk_text"))
-                st.divider()
+            st.json(response.json())
         except httpx.HTTPError as exc:
             st.error(f"Retrieve failed: {exc}")
