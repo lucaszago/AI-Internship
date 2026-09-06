@@ -5,7 +5,9 @@ FastAPI service with `POST /ingest`, `GET /debug/retrieve`, and `POST /ask` (cit
 **Vector store:** [Pinecone](https://www.pinecone.io/)  
 **Deploy:** [Render](https://render.com) (public HTTPS URL — matches the [Session 1 deploy pattern](https://tailabs.ai/ai-eng-syllabus/week-1/ship-your-first-ai-endpoint-assignment-guide))
 
-Do **not** post the live URL publicly. Use it only for Maven submission.
+**Live URL:** https://week1v2-ask-api-public.onrender.com  
+
+Do **not** post the live URL on LinkedIn or other public posts. Use it only for Maven submission.
 
 ---
 
@@ -109,19 +111,21 @@ Follow the same pattern as the [Session 1 assignment guide](https://tailabs.ai/a
    - `OPENAI_API_KEY`
    - `PINECONE_API_KEY`
    - `PINECONE_INDEX_NAME=document-chunks` (optional if already in `render.yaml`)
-6. Wait until **Live**, then copy `https://YOUR-SERVICE.onrender.com`.
+6. Wait until **Live**. Live URL:
+
+https://week1v2-ask-api-public.onrender.com
 
 Prove it:
 
 ```bash
-curl -s https://YOUR-SERVICE.onrender.com/health
+curl -s https://week1v2-ask-api-public.onrender.com/health
 
-curl -s -X POST https://YOUR-SERVICE.onrender.com/ask \
+curl -s -X POST https://week1v2-ask-api-public.onrender.com/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
 ```
 
-Point Streamlit at the Render URL for your screenshot.
+Point Streamlit at that URL for your screenshot.
 
 ---
 
@@ -136,10 +140,8 @@ Point Streamlit at the Render URL for your screenshot.
 | 5 | Refusal | `POST /ask` with an out-of-docs question |
 | 6 | Streamlit screenshot | Ingest + Ask tabs (API URL visible) |
 
-Replace `LIVE` with your Render URL:
-
 ```bash
-LIVE=https://YOUR-SERVICE.onrender.com
+LIVE=https://week1v2-ask-api-public.onrender.com
 
 curl -s -X POST "$LIVE/ingest" -H "Content-Type: application/json" \
   -d '{"text": "Remote work: up to 3 days per week with manager approval.", "document_id": "handbook"}'
@@ -162,6 +164,6 @@ curl -s -X POST "$LIVE/ask" -H "Content-Type: application/json" \
 | `OPENAI_API_KEY` | `sk-...` | Embeddings + LLM |
 | `PINECONE_API_KEY` | `pcsk_...` | Vector store |
 | `PINECONE_INDEX_NAME` | `document-chunks` | Index name |
-| `API_URL` | `http://127.0.0.1:8000` | Streamlit → API |
+| `API_URL` | `https://week1v2-ask-api-public.onrender.com` | Streamlit → API |
 
 Never commit `.env`.
