@@ -255,7 +255,8 @@ On the Render “deploying from a Blueprint” screen:
 
 Do **not** reuse Blueprint Path `render.yaml` for this — that is the existing RAG service.
 
-Then set secrets when prompted (at minimum **`GOOGLE_API_KEY`**). OpenAI/Pinecone are optional on this service unless you also want `/ask` there.
+On the new service, set at least **`GOOGLE_API_KEY`**.  
+`ROOT_UI=agent` (in `render.agent.yaml`) makes `/` show the **ops analyst** UI (not the RAG Q&A page).
 
 ### After deploy — prove the agent service
 

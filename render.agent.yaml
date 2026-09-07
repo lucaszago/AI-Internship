@@ -11,6 +11,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+      - key: ROOT_UI
+        value: agent
       - key: AGENT_MODEL
         value: gemini-3.6-flash
       - key: AGENT_MAX_STEPS
