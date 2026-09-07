@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+LIVE_APP_URL = "https://week1v2-ask-api-public.onrender.com"
+DEFAULT_API_URL = os.getenv("API_URL", LIVE_APP_URL)
 
 st.set_page_config(page_title="RAG Demo", layout="wide")
 st.title("Session 2 RAG Demo")
@@ -18,7 +19,7 @@ st.caption("Ingest documents and ask questions via your FastAPI service.")
 
 api_url = st.sidebar.text_input("API base URL", DEFAULT_API_URL.rstrip("/"))
 st.sidebar.caption(
-    "Default is local API. After Render deploy, paste your public URL here."
+    "Default is the live Render URL. Use http://127.0.0.1:8000 for local API."
 )
 
 ingest_tab, ask_tab, debug_tab = st.tabs(["Ingest", "Ask", "Debug retrieve"])

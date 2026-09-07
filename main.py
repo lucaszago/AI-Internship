@@ -39,6 +39,7 @@ from rag.routes import (
     handle_rag_ask,
     usage_counts,
 )
+from week3_agent.agent_api import agent_router
 
 THIS_DIR = Path(__file__).resolve().parent
 load_dotenv(THIS_DIR / ".env")
@@ -246,6 +247,7 @@ def ask(body: AskRequest) -> AskResponse:
 
 
 app.include_router(router)
+app.include_router(agent_router)
 
 
 if __name__ == "__main__":
