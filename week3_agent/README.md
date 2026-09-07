@@ -250,7 +250,7 @@ On the Render “deploying from a Blueprint” screen:
 | Field | Value |
 | --- | --- |
 | **Blueprint Name** | e.g. `ai-internship-week3-agent` (required) |
-| **Branch** | `feature/lzago` (must include `week3_agent/` — push first) |
+| **Branch** | `main` |
 | **Blueprint Path** | `render.agent.yaml` |
 
 Do **not** reuse Blueprint Path `render.yaml` for this — that is the existing RAG service.
@@ -275,7 +275,7 @@ Leave `https://week1v2-ask-api-public.onrender.com` as-is for Maven Session 1/2 
 ### Option — Docker for the agent service only
 
 1. Push branch with `Dockerfile`.
-2. New Web Service → Docker → repo `lucaszago/AI-Internship` → branch `feature/lzago`.
+2. New Web Service → Docker → repo `lucaszago/AI-Internship` → branch `main`.
 3. Name it e.g. `week3-ops-agent-api`; set `GOOGLE_API_KEY` (and optional RAG keys).
 4. Same `curl` proofs as above.
 
@@ -285,7 +285,7 @@ Leave `https://week1v2-ask-api-public.onrender.com` as-is for Maven Session 1/2 
 # from repo root — Week 3 must be on GitHub
 git add -A   # do not add week3_agent/.env
 git status   # confirm .env is not staged
-# commit + push feature/lzago
+# commit + push main
 ```
 
 Maven: show `/agent` JSON or Streamlit pointed at the **agent** URL — never paste keys.
@@ -304,29 +304,19 @@ Maven: show `/agent` JSON or Streamlit pointed at the **agent** URL — never pa
 
 ## Path A checklist
 
-- [x] Google ADK agent with max steps (`AGENT_MAX_STEPS` → `RunConfig.max_llm_calls`)
+- [x] Google ADK agent with max steps (`AGENT_MAX_STEPS`)
 - [x] One real tool: `run_sql` on seeded SQLite
-- [x] Multi-step run with Think → Act → Observe visible (CLI + Streamlit)
-- [x] Streamlit UI for the agent (`ui/agent_app.py`)
+- [x] Think → Act → Observe visible (CLI, Streamlit, live UI)
+- [x] Streamlit UI (`ui/agent_app.py`)
 - [x] One-liner: agent vs workflow (above)
-- [x] FastAPI `POST /agent` bridge (`agent_api/`)
-- [ ] CLI / Streamlit / live `/agent` proof with your keys
-- [ ] No secrets in screenshots / Maven posts
-- [ ] Week 1/2 root API still works on Render after adding ADK deps
+- [x] FastAPI `POST /agent` + dedicated Render service (`week3-ops-agent-api`)
+- [ ] Maven submission: screenshot or Loom + one-liner (no secrets)
 
 ---
 
 ## Out of scope (Path A)
 
-- Multi-agent SQL pipelines / Postgres / Alembic
-- Writing to Sheets or sending email (stretch / HITL later)
-
-Docker + Render steps above are **optional stretch** for a live `/agent` URL; local CLI + Streamlit already satisfy Path A.
-
----
-
-## References
-
-- [Week 3 assignment guide](https://tailabs.ai/ai-eng-syllabus/week-3/week-3-agent-assignment-guide)
-- [ADK function tools](https://adk.dev/tools-custom/function-tools/)
-- Sample patterns: [adk-multi-agent-systems](https://github.com/akshika47/AI-Internship/tree/main/ai-engineering-bootcamp/adk-multi-agent-systems) (do not submit unchanged)
+- Multi-agent / A2A routers
+- Human-in-the-loop before writes, Sheets, or email
+- Postgres / Alembic pipelines
+- Path B stretch (MCP, second-stack mirror, prompt-injection drill)
