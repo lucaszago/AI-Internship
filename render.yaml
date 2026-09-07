@@ -1,4 +1,5 @@
-# Public web service (no SSO) — set secrets in the Render dashboard.
+# Session 1/2 RAG only — existing live service.
+# Do not put Week 3 secrets here; use render.agent.yaml for the agent service.
 services:
   - type: web
     name: week1v2-ask-api-public

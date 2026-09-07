@@ -1,3 +1,14 @@
+# AI-Internship
+
+Internship repo with **Week 1/2 RAG** at the root and **Week 3 agent** under [`week3_agent/`](week3_agent/).
+
+| Week | What | Where |
+| --- | --- | --- |
+| 1–2 | FastAPI RAG (`/ingest`, `/ask`) + Pinecone + Streamlit | Repo root (`main.py`, `rag/`, `ui/streamlit_app.py`) |
+| 3 | Ops revenue analyst (Google ADK + `run_sql` + CLI + Streamlit) | [`week3_agent/`](week3_agent/README.md) |
+
+---
+
 # Week 2 — RAG Q&A API (Pinecone)
 
 FastAPI service with `POST /ingest`, `GET /debug/retrieve`, and `POST /ask` (citations + refusal), plus a Streamlit UI.
@@ -18,6 +29,7 @@ Do **not** post the live URL on LinkedIn or other public posts. Use it only for 
 3. [One-time Pinecone setup](#one-time-pinecone-setup)
 4. [Deploy to Render](#deploy-to-render)
 5. [Assignment proof (Maven)](#assignment-proof-maven)
+6. [Week 3 agent](#week-3-agent)
 
 ---
 
@@ -111,6 +123,8 @@ Follow the same pattern as the [Session 1 assignment guide](https://tailabs.ai/a
    - `OPENAI_API_KEY`
    - `PINECONE_API_KEY`
    - `PINECONE_INDEX_NAME=document-chunks` (optional if already in `render.yaml`)
+   - `GOOGLE_API_KEY` (Week 3 `POST /agent`)
+   - `AGENT_MODEL=gemini-3.6-flash` (optional)
 6. Wait until **Live**. Live URL:
 
 https://week1v2-ask-api-public.onrender.com
@@ -123,9 +137,15 @@ curl -s https://week1v2-ask-api-public.onrender.com/health
 curl -s -X POST https://week1v2-ask-api-public.onrender.com/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is RAG in one sentence?", "model": "gpt-4o-mini"}'
+
+curl -s -X POST https://week1v2-ask-api-public.onrender.com/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which city has the highest completed-order revenue?"}'
 ```
 
 Point Streamlit at that URL for your screenshot.
+
+**Two Render services:** Session 1/2 RAG uses [`render.yaml`](render.yaml) (`week1v2-ask-api-public`). Week 3 agent uses a **separate** Blueprint file [`render.agent.yaml`](render.agent.yaml) (`week3-ops-agent-api`). See [week3_agent/README.md](week3_agent/README.md#deploy-to-render-two-services).
 
 ---
 
@@ -165,5 +185,31 @@ curl -s -X POST "$LIVE/ask" -H "Content-Type: application/json" \
 | `PINECONE_API_KEY` | `pcsk_...` | Vector store |
 | `PINECONE_INDEX_NAME` | `document-chunks` | Index name |
 | `API_URL` | `https://week1v2-ask-api-public.onrender.com` | Streamlit → API |
+| `GOOGLE_API_KEY` | `...` | Week 3 ADK / `POST /agent` |
+| `AGENT_MODEL` | `gemini-3.6-flash` | Gemini model for agent |
 
 Never commit `.env`.
+
+---
+
+## Week 3 agent
+
+Path A ops revenue analyst (Google ADK + read-only SQLite) lives in a separate folder so it does not disturb the Render RAG deploy.
+
+Full docs: **[week3_agent/README.md](week3_agent/README.md)**
+
+```bash
+cp week3_agent/.env.example week3_agent/.env
+# set GOOGLE_API_KEY=...
+
+uv run python week3_agent/agent/seed_demo_db.py
+uv run python week3_agent/agent/run_cli.py
+uv run streamlit run week3_agent/ui/agent_app.py
+
+# optional — same agent on FastAPI (POST /agent)
+uv run uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Docker + Render: see week3_agent/README.md (Dockerize / Deploy to Render)
+```
+
+Maven one-liner: *This is an agent because it chooses and revises SQL based on tool results, not a hardcoded query script.*

@@ -6,3 +6,4 @@ pinecone
 langchain-text-splitters
 streamlit
 uvicorn[standard]
+google-adk>=2.1.0

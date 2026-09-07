@@ -25,3 +25,6 @@ env/
 
 # Backups
 *.bak
+
+# Week 3 demo DB (rebuilt by seed_demo_db.py)
+week3_agent/data/*.db
