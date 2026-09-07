@@ -46,8 +46,12 @@ load_dotenv(THIS_DIR / ".env")
 load_dotenv(THIS_DIR.parent / ".env")
 
 app = FastAPI(
-    title="Week 1 v2 /ask Demo",
-    description="Session 2 RAG API with Pinecone retrieval. Browser UI at `/`.",
+    title="Week 3 Ops Agent" if os.getenv("ROOT_UI", "rag").lower() == "agent" else "Week 1 v2 /ask Demo",
+    description=(
+        "Ops revenue analyst (ADK). Browser UI at `/` calls POST /agent."
+        if os.getenv("ROOT_UI", "rag").lower() == "agent"
+        else "Session 2 RAG API with Pinecone retrieval. Browser UI at `/`."
+    ),
 )
 router = APIRouter()
 _client: OpenAI | None = None
@@ -69,6 +73,9 @@ class AskRequest(BaseModel):
 
 @router.get("/", include_in_schema=False)
 def ui() -> FileResponse:
+    """Serve RAG demo or agent demo based on ``ROOT_UI`` (rag|agent)."""
+    if os.getenv("ROOT_UI", "rag").strip().lower() == "agent":
+        return FileResponse(THIS_DIR / "static" / "agent.html")
     return FileResponse(THIS_DIR / "static" / "index.html")
 
 
